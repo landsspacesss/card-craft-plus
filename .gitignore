@@ -1,0 +1,9 @@
+.pio/
+build/
+.vscode/
+.DS_Store
+__pycache__/
+*.pyc
+
+# generated sound previews — the committed header is the build input
+tools/sfx-preview/
