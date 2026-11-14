@@ -665,4 +665,33 @@ float daylight(const State& s);
 
 uint32_t score(const State& s);
 
+// ---- persistence -------------------------------------------------------------
+//
+// State is a plain struct of numbers -- no pointers, no text, no ownership, and
+// no member with a constructor of its own -- so a save is a memcpy of it behind
+// a header the reader checks. The alternative, a field-by-field serializer, is
+// a second description of this struct that has to be kept in step with it
+// forever, and the first field anyone adds and forgets to serialize would look
+// exactly like a save that worked.
+//
+// The version is what makes that honest: a blob is meaningful only to the build
+// that wrote it, and one written by a different build is refused rather than
+// reinterpreted. Bump the version when State's shape changes.
+//
+// The world is not in here. That is world::snapshotSave(), and it is the big
+// half: about sixty kilobytes against this one's two.
+constexpr uint16_t STATE_BLOB_VERSION = 1;
+
+// Header plus the struct. Fixed, so a record can be sized without touching the
+// simulation.
+int stateBytes();
+
+// Writes the simulation. Returns the bytes written, or -1. It is the caller's
+// job to write the world too -- these are two halves of one save and neither
+// is meaningful alone.
+int stateSave(const State& s, world::Sink& out);
+
+// Reads the simulation back. On -1, s holds whatever the partial read left.
+int stateLoad(State& s, world::Source& in);
+
 }  // namespace game

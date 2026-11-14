@@ -69,7 +69,10 @@ int  splashIndex();
 void setSplashIndex(int i);
 
 // How many stops the title menu has. The caller wraps against this.
-constexpr int TITLE_ROWS = 2;
+//
+// Three, and three is also the most that fits: ui::title puts a row every 20 px
+// from y=76, so a fourth would start at 136 on a 135-row panel.
+constexpr int TITLE_ROWS = 3;
 
 // Every binding the board has, drawn from hal::Caps. Reachable from the title
 // and from the pause card, which is why it is a card of its own rather than

@@ -3,6 +3,8 @@
 // Run with:  pio test -e native
 #include <unity.h>
 
+#include <string.h>
+
 #include "world.h"
 
 using namespace world;
@@ -947,6 +949,216 @@ static void test_no_surface_where_there_is_no_headroom(void) {
   TEST_ASSERT_EQUAL_UINT8(NO_SURFACE, surfaceUnder(x, y, g));
 }
 
+// ---- persistence -------------------------------------------------------------
+//
+// The snapshot is the only thing between a run and the SD card, and the failure
+// it can have is silent: a grid that reloads almost right. So the round trip is
+// checked cell by cell against a saved copy, not against "it did not crash".
+
+namespace {
+
+struct MemBuf {
+  // Comfortably over a snapshot, which is about 65 KB plus two bytes a marker.
+  uint8_t b[200000];
+  int     len = 0;
+};
+
+struct MemSink : Sink {
+  MemBuf& m;
+  explicit MemSink(MemBuf& buf) : m(buf) {}
+  int put(const void* p, int n) override {
+    if (m.len + n > (int)sizeof m.b) return -1;
+    memcpy(m.b + m.len, p, (size_t)n);
+    m.len += n;
+    return n;
+  }
+};
+
+struct MemSource : Source {
+  MemBuf& m;
+  int     pos = 0;
+  explicit MemSource(MemBuf& buf) : m(buf) {}
+  int get(void* p, int n) override {
+    if (pos + n > m.len) return -1;
+    memcpy(p, m.b + pos, (size_t)n);
+    pos += n;
+    return n;
+  }
+};
+
+// A sink that accepts a fixed number of bytes and then refuses, for the
+// interrupted-write case.
+struct ShortSink : Sink {
+  int left;
+  explicit ShortSink(int n) : left(n) {}
+  int put(const void* p, int n) override {
+    (void)p;
+    if (n > left) return -1;
+    left -= n;
+    return n;
+  }
+};
+
+// What a cell looks like from the outside: everything a save has to preserve.
+struct CellView {
+  uint8_t  h, top, light;
+  uint8_t  mat[MAX_H];
+};
+
+void captureWorld(CellView* out) {
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) {
+      CellView& v = out[y * W + x];
+      v.h = height(x, y);
+      v.top = topMat(x, y);
+      v.light = light(x, y);
+      for (int z = 0; z < MAX_H; ++z) v.mat[z] = blockAt(x, y, z);
+    }
+}
+
+// Every cell of `out` agrees with the world in memory.
+void assertWorldMatches(const CellView* want) {
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) {
+      const CellView& v = want[y * W + x];
+      TEST_ASSERT_EQUAL_UINT8(v.h, height(x, y));
+      TEST_ASSERT_EQUAL_UINT8(v.top, topMat(x, y));
+      TEST_ASSERT_EQUAL_UINT8(v.light, light(x, y));
+      for (int z = 0; z < MAX_H; ++z) {
+        if (v.mat[z] != blockAt(x, y, z)) {
+          // The assertion macros print the line, not the coordinate; this says
+          // which cell disagreed before it aborts.
+          TEST_ASSERT_EQUAL_INT(x, -1);
+        }
+      }
+    }
+}
+
+}  // namespace
+
+// A snapshot is a straight dump, so what it has to be is exact. This mines a
+// hole, builds into mid-air, lights a torch and then round-trips the lot.
+static void test_snapshot_round_trip_is_exact(void) {
+  static CellView want[W * H];
+  static MemBuf   buf;
+
+  generate(4242);
+  // An edit that a diff against a regenerated world would have to notice: a
+  // block taken out of the MIDDLE of a column, so the runs above it survive.
+  const int cx = W / 2, cy = H / 2;
+  int holeZ = -1;
+  for (int z = GROUND; z > 0; --z)
+    if (solidAt(cx, cy, z)) { uint8_t m, n; mine(cx, cy, z, 100000, m, n); holeZ = z; break; }
+  TEST_ASSERT_TRUE(holeZ > 0);
+  // ...and one added to it, which is a material marker as well as a bit.
+  TEST_ASSERT_EQUAL_UINT8(PLACE_OK, (uint8_t)place(cx + 2, cy, MAX_H - 1, B_BRICK));
+  // ...and a light source, whose glow is deliberately NOT in the file. Placed
+  // with the column overload, which puts it ON the surface: a block one cell
+  // higher would be a floating run, and a torch in a floating run lights
+  // nothing because the emitter test reads the run resting on the base plane.
+  TEST_ASSERT_TRUE(place(cx - 2, cy, (uint8_t)B_TORCH));
+  rebuildLight();          // what the game does after an edit; not place()'s job
+  TEST_ASSERT_TRUE(light(cx - 2, cy) > 0);
+
+  captureWorld(want);
+
+  const int wantBytes = snapshotBytes();
+  TEST_ASSERT_TRUE(wantBytes > W * H * 6);      // the grid is all there
+  MemSink sink(buf);
+  TEST_ASSERT_EQUAL_INT(wantBytes, snapshotSave(sink));
+  TEST_ASSERT_EQUAL_INT(wantBytes, buf.len);
+
+  // A different world in memory, so a load that silently did nothing fails
+  // rather than matching what was never replaced.
+  generate(777);
+  TEST_ASSERT_NOT_EQUAL(4242, (long)currentSeed());
+
+  MemSource src(buf);
+  TEST_ASSERT_EQUAL_INT(wantBytes, snapshotLoad(src));
+  TEST_ASSERT_EQUAL_UINT32(4242, currentSeed());
+  assertWorldMatches(want);
+}
+
+// The light nibble is not in the file; it is rebuilt on load. That is only safe
+// if the rebuild lands on the same answer, which is what this checks -- with a
+// torch in the world and the light having been rebuilt by the load rather than
+// restored from bytes.
+static void test_snapshot_rebuilds_light(void) {
+  static CellView want[W * H];
+  static MemBuf   buf;
+
+  generate(31);
+  const int tx = W / 2 + 5, ty = H / 2 + 5;
+  TEST_ASSERT_TRUE(place(tx, ty, (uint8_t)B_TORCH));
+  rebuildLight();          // what the game does after an edit; not place()'s job
+  TEST_ASSERT_TRUE(light(tx, ty) > 0);
+  captureWorld(want);
+
+  MemSink sink(buf);
+  TEST_ASSERT_TRUE(snapshotSave(sink) > 0);
+  generate(5);
+  MemSource src(buf);
+  TEST_ASSERT_TRUE(snapshotLoad(src) > 0);
+  assertWorldMatches(want);
+  TEST_ASSERT_TRUE(light(tx, ty) > 0);
+}
+
+// A save written by anything else is refused, not interpreted.
+static void test_snapshot_refuses_foreign_bytes(void) {
+  static MemBuf buf;
+  generate(8);
+  MemSink sink(buf);
+  TEST_ASSERT_TRUE(snapshotSave(sink) > 0);
+
+  MemBuf bad = buf;
+  bad.b[0] ^= 0xFF;                       // the magic no longer spells CCWS
+  MemSource src(bad);
+  TEST_ASSERT_EQUAL_INT(-1, snapshotLoad(src));
+}
+
+// An interrupted write is a short stream, and a short stream must fail the load
+// rather than half-fill the grid and report success.
+static void test_snapshot_refuses_a_truncated_stream(void) {
+  static MemBuf buf;
+  generate(9);
+  MemSink sink(buf);
+  TEST_ASSERT_TRUE(snapshotSave(sink) > 0);
+
+  MemBuf cut = buf;
+  cut.len -= 100;
+  MemSource src(cut);
+  TEST_ASSERT_EQUAL_INT(-1, snapshotLoad(src));
+
+  // ...and the same the other way, at the sink: a card that stops accepting
+  // bytes makes the save fail rather than report a length it did not write.
+  const int full = snapshotBytes();
+  ShortSink shortSink(full / 2);
+  TEST_ASSERT_EQUAL_INT(-1, snapshotSave(shortSink));
+}
+
+// The marker pool is an arena, so its indices are meaningless outside the run
+// that made them. What a save has to carry is what each CELL means, and the
+// pool has to come back to the same size -- a load that leaked a marker a
+// column would pass the cell comparisons and still run the board out of pool
+// after a few saves.
+static void test_snapshot_restores_the_marker_pool(void) {
+  static MemBuf buf;
+  generate(64);
+  const int freeBefore = marksFree();
+  TEST_ASSERT_EQUAL_UINT8(PLACE_OK, (uint8_t)place(W / 2, H / 2, MAX_H - 1, B_PLANK));
+  const int freeAfterPlace = marksFree();
+  TEST_ASSERT_TRUE(freeAfterPlace < freeBefore);   // placing took the pool
+
+  MemSink sink(buf);
+  TEST_ASSERT_TRUE(snapshotSave(sink) > 0);
+
+  generate(65);
+  MemSource src(buf);
+  TEST_ASSERT_TRUE(snapshotLoad(src) > 0);
+  TEST_ASSERT_EQUAL_INT(freeAfterPlace, marksFree());
+  TEST_ASSERT_EQUAL_UINT8(B_PLANK, blockAt(W / 2, H / 2, MAX_H - 1));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_generate_is_deterministic);
@@ -995,5 +1207,10 @@ int main(int, char**) {
   RUN_TEST(test_a_staircase_can_be_climbed);
   RUN_TEST(test_no_surface_where_there_is_no_headroom);
   RUN_TEST(test_degenerate_input);
+  RUN_TEST(test_snapshot_round_trip_is_exact);
+  RUN_TEST(test_snapshot_rebuilds_light);
+  RUN_TEST(test_snapshot_refuses_foreign_bytes);
+  RUN_TEST(test_snapshot_refuses_a_truncated_stream);
+  RUN_TEST(test_snapshot_restores_the_marker_pool);
   return UNITY_END();
 }

@@ -1930,4 +1930,204 @@ int explode(int cx, int cy, int radius) {
   return n;
 }
 
+// ---- persistence -------------------------------------------------------------
+//
+// One code path for both directions. Each field is handed to Stream, which
+// either writes it through the Sink or fills it from the Source, so a save and
+// a load cannot drift apart into two layouts that agree only by inspection.
+
+namespace {
+
+// "CCWS", little-endian: 'C' 0x43, 'C' 0x43, 'W' 0x57, 'S' 0x53.
+constexpr uint32_t SNAP_MAGIC   = 0x53574343u;
+constexpr uint16_t SNAP_VERSION = 1;
+
+struct Stream {
+  Sink*   out = nullptr;   // exactly one of these is set
+  Source* in  = nullptr;
+  int     bytes = 0;
+  bool    ok    = true;
+
+  bool chunk(void* p, int k) {
+    if (!ok) return false;
+    ok = out ? (out->put(p, k) == k) : (in->get(p, k) == k);
+    if (ok) bytes += k;
+    return ok;
+  }
+
+  bool byte(uint8_t& v) {
+    uint8_t b[1];
+    if (out) b[0] = v;
+    if (!chunk(b, 1)) return false;
+    if (in) v = b[0];
+    return true;
+  }
+
+  bool u16(uint16_t& v) {
+    uint8_t b[2];
+    if (out) { b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8); }
+    if (!chunk(b, 2)) return false;
+    if (in) v = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+    return true;
+  }
+
+  bool u32(uint32_t& v) {
+    uint8_t b[4];
+    if (out) {
+      b[0] = (uint8_t)v;         b[1] = (uint8_t)(v >> 8);
+      b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24);
+    }
+    if (!chunk(b, 4)) return false;
+    if (in) {
+      v = (uint32_t)b[0] | ((uint32_t)b[1] << 8)
+        | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    }
+    return true;
+  }
+};
+
+// The two block sizes. Batches rather than single elements because the SD
+// layer behind this is buffered but not free, and a per-cell call would be nine
+// thousand chances for a half-written column.
+constexpr int WORD_BATCH = 64;                  // 256 bytes of occupancy
+constexpr int BYTE_BATCH = 128;                 // 128 bytes of surf or smat
+
+bool transferWordGrid(Stream& st) {
+  for (int i = 0; i < W * H; i += WORD_BATCH) {
+    uint8_t b[WORD_BATCH * 4];
+    if (st.out) {
+      for (int j = 0; j < WORD_BATCH; ++j) {
+        const uint32_t v = g_solid[i + j];
+        b[j * 4 + 0] = (uint8_t)v;         b[j * 4 + 1] = (uint8_t)(v >> 8);
+        b[j * 4 + 2] = (uint8_t)(v >> 16); b[j * 4 + 3] = (uint8_t)(v >> 24);
+      }
+    }
+    if (!st.chunk(b, (int)sizeof b)) return false;
+    if (st.in) {
+      for (int j = 0; j < WORD_BATCH; ++j) {
+        g_solid[i + j] = (uint32_t)b[j * 4 + 0] | ((uint32_t)b[j * 4 + 1] << 8)
+                       | ((uint32_t)b[j * 4 + 2] << 16)
+                       | ((uint32_t)b[j * 4 + 3] << 24);
+      }
+    }
+  }
+  return true;
+}
+
+// The generator's terrain anchors. Written as-is rather than re-derived from
+// the seed: re-deriving would mean generate() has to still produce exactly
+// today's world, which is a promise a save file should not be holding it to.
+bool transferSurf(Stream& st) {
+  for (int i = 0; i < W * H; i += BYTE_BATCH) {
+    if (!st.chunk(g_surf + i, BYTE_BATCH)) return false;
+  }
+  return true;
+}
+
+// Surface material only. The light nibble is left out on purpose: it is a
+// function of what is solid and what emits, so rebuildLight() reproduces it
+// exactly, and a glow that was saved mid-recompute cannot arrive stale.
+bool transferSmat(Stream& st) {
+  for (int i = 0; i < W * H; i += BYTE_BATCH) {
+    uint8_t b[BYTE_BATCH];
+    if (st.out) {
+      for (int j = 0; j < BYTE_BATCH; ++j) b[j] = smatOf(i + j);
+    }
+    if (!st.chunk(b, BYTE_BATCH)) return false;
+    if (st.in) {
+      for (int j = 0; j < BYTE_BATCH; ++j) setSmat(i + j, b[j]);
+    }
+  }
+  return true;
+}
+
+// The marker lists, one cell at a time: a count byte per cell and then that
+// many (base, mat) pairs, ascending as the lists are.
+//
+// Not the pool itself. The pool is an arena whose indices mean nothing outside
+// the run that allocated them, so a dump of it would carry the free-list order
+// and the gaps. What a cell means is its list, and that is what is written --
+// then rebuilt with fresh indices on load. Lists are at most MAX_H long.
+bool transferMarks(Stream& st) {
+  uint8_t bases[MAX_H], mats[MAX_H];
+  for (int i = 0; i < W * H; ++i) {
+    if (st.in) markClear(i);
+    uint8_t n = 0;
+    if (st.out) {
+      for (uint16_t k = g_mhead[i]; k != MARK_NIL; k = g_mark[k].next) {
+        if (n == MAX_H) break;      // cannot happen; the list is bounded by z
+        bases[n] = g_mark[k].base;
+        mats[n]  = g_mark[k].mat;
+        ++n;
+      }
+    }
+    if (!st.byte(n)) return false;
+    for (int j = 0; j < n; ++j) {
+      if (!st.byte(bases[j])) return false;
+      if (!st.byte(mats[j]))  return false;
+      if (st.in) {
+        const uint16_t slot = markAlloc();
+        if (slot == MARK_NIL) return false;   // the file describes more than the pool holds
+        g_mark[slot].base = bases[j];
+        g_mark[slot].mat  = mats[j];
+        g_mark[slot].next = MARK_NIL;
+        // Ascending order is what markAt() breaks on, and the file preserves
+        // it, so appending at the tail keeps the list sorted for free.
+        uint16_t* tail = &g_mhead[i];
+        while (*tail != MARK_NIL) tail = &g_mark[*tail].next;
+        *tail = slot;
+      }
+    }
+  }
+  return true;
+}
+
+bool transferAll(Stream& st) {
+  uint32_t magic = SNAP_MAGIC;
+  uint16_t ver = SNAP_VERSION, w = (uint16_t)W, h = (uint16_t)H, mh = (uint16_t)MAX_H;
+  uint32_t sd = (uint32_t)g_seed;
+  if (!st.u32(magic) || !st.u16(ver) || !st.u16(w) || !st.u16(h) || !st.u16(mh)
+      || !st.u32(sd)) return false;
+  if (st.in && (magic != SNAP_MAGIC || ver != SNAP_VERSION
+                || w != W || h != H || mh != MAX_H)) return false;
+
+  if (!transferSurf(st) || !transferWordGrid(st) || !transferSmat(st)) return false;
+
+  if (st.in) marksInit();
+  if (!transferMarks(st)) return false;
+
+  if (st.in) {
+    g_seed = (int32_t)sd;
+    s_mineX = s_mineY = s_mineZ = -1;
+    s_effort = 0;
+    rebuildLight();
+  }
+  return st.ok;
+}
+
+}  // namespace
+
+uint32_t currentSeed() { return (uint32_t)g_seed; }
+
+int snapshotBytes() {
+  int n = 4 + 2 + 2 + 2 + 2 + 4;      // header
+  n += W * H;                          // surf
+  n += W * H * 4;                      // solid
+  n += W * H;                          // smat
+  n += W * H;                          // one count byte per cell
+  for (int i = 0; i < W * H; ++i)
+    for (uint16_t k = g_mhead[i]; k != MARK_NIL; k = g_mark[k].next) n += 2;
+  return n;
+}
+
+int snapshotSave(Sink& out) {
+  Stream st; st.out = &out;
+  return transferAll(st) ? st.bytes : -1;
+}
+
+int snapshotLoad(Source& in) {
+  Stream st; st.in = &in;
+  return transferAll(st) ? st.bytes : -1;
+}
+
 }  // namespace world

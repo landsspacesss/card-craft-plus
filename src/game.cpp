@@ -14,6 +14,8 @@
 #include <math.h>
 #include <string.h>
 
+#include <type_traits>
+
 namespace game {
 
 // ---- tunables ---------------------------------------------------------------
@@ -2312,6 +2314,58 @@ uint32_t tick(State& s, const Input& in) {
     ev |= EV_MOB_IDLE;
   }
   return ev;
+}
+
+// ---- persistence -------------------------------------------------------------
+//
+// See game.h for why this is a memcpy and not a field list. The static_assert is
+// the load-bearing part: if anyone ever adds a member with a constructor, a
+// pointer or a vtable to State, this stops compiling instead of quietly writing
+// a save that restores the wrong bytes into the wrong field.
+
+namespace {
+
+// "CGTS", little-endian: 'C' 0x43, 'G' 0x47, 'T' 0x54, 'S' 0x53.
+constexpr uint32_t BLOB_MAGIC = 0x53544743u;
+constexpr int      BLOB_HDR   = 4 + 2 + 4;   // magic, version, byte count
+
+void put16(uint8_t* p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+void put32(uint8_t* p, uint32_t v) {
+  p[0] = (uint8_t)v;         p[1] = (uint8_t)(v >> 8);
+  p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+uint16_t get16(const uint8_t* p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
+uint32_t get32(const uint8_t* p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+       | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+}  // namespace
+
+int stateBytes() { return BLOB_HDR + (int)sizeof(State); }
+
+int stateSave(const State& s, world::Sink& out) {
+  static_assert(std::is_trivially_copyable<State>::value,
+                "State must stay a plain struct of numbers to be saved as bytes");
+  uint8_t hdr[BLOB_HDR];
+  put32(hdr + 0, BLOB_MAGIC);
+  put16(hdr + 4, STATE_BLOB_VERSION);
+  put32(hdr + 6, (uint32_t)sizeof(State));
+  if (out.put(hdr, BLOB_HDR) != BLOB_HDR) return -1;
+  if (out.put(&s, (int)sizeof s) != (int)sizeof s) return -1;
+  return BLOB_HDR + (int)sizeof(State);
+}
+
+int stateLoad(State& s, world::Source& in) {
+  static_assert(std::is_trivially_copyable<State>::value,
+                "State must stay a plain struct of numbers to be saved as bytes");
+  uint8_t hdr[BLOB_HDR];
+  if (in.get(hdr, BLOB_HDR) != BLOB_HDR) return -1;
+  if (get32(hdr + 0) != BLOB_MAGIC) return -1;
+  if (get16(hdr + 4) != STATE_BLOB_VERSION) return -1;
+  if (get32(hdr + 6) != (uint32_t)sizeof(State)) return -1;
+  if (in.get(&s, (int)sizeof s) != (int)sizeof s) return -1;
+  return BLOB_HDR + (int)sizeof(State);
 }
 
 }  // namespace game

@@ -321,4 +321,50 @@ bool place(int x, int y, uint8_t mat);
 // centre. Returns how many blocks it destroyed.
 int explode(int cx, int cy, int radius);
 
+// ---- persistence ------------------------------------------------------------
+//
+// A save is a straight dump of the four arrays below, not a diff against a
+// regenerated world. A diff would be a tenth of the size and would also make a
+// load correct only if this build's generator produced exactly what the writing
+// build's did -- a coupling a save file, which outlives the build that wrote it,
+// has no business having. Sixty kilobytes of SD is not worth that.
+//
+// It is never assembled in memory either: the grid is ninety kilobytes and the
+// board has about eight free after the two framebuffers, so a snapshot streams
+// through one of these a couple hundred bytes at a time.
+//
+// Little-endian throughout, which is what this chip and the host tests both
+// are. The magic and the version are the contract; anything else is refused
+// rather than interpreted.
+struct Sink {
+  // Return n on success, anything else to abort the snapshot.
+  virtual int put(const void* p, int n) = 0;
+  virtual ~Sink() {}
+};
+
+struct Source {
+  // Return n on success, anything else to abort the load.
+  virtual int get(void* p, int n) = 0;
+  virtual ~Source() {}
+};
+
+// The seed the world in memory was generated from. Named rather than called
+// `seed()` because generate() takes a parameter by that name, and a local
+// shadows a namespace-scope function -- the next call written inside it would
+// bind to the parameter and fail to compile for no obvious reason.
+uint32_t currentSeed();
+
+// Exactly how many bytes snapshotSave() will write right now. Sized by the
+// marker lists, which is why it is asked rather than declared.
+int snapshotBytes();
+
+// Writes the whole grid. Returns the bytes written, or -1.
+int snapshotSave(Sink& out);
+
+// Replaces the whole grid from a snapshot, and rebuilds the light that the
+// file deliberately does not carry. Returns the bytes read, or -1 -- and on -1
+// the grid holds whatever the partial read left, so the caller must not use the
+// world afterwards.
+int snapshotLoad(Source& in);
+
 }  // namespace world

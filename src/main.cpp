@@ -27,13 +27,14 @@
 #include "render.h"
 #include "screenshot.h"
 #include "sfx.h"
+#include "storage_sd.h"
 #include "ui.h"
 #include "world.h"
 
 namespace {
 
 enum Screen : uint8_t { SCR_TITLE, SCR_PLAY, SCR_PAUSE, SCR_CRAFT, SCR_RECIPES,
-                        SCR_CONTROLS, SCR_DEAD };
+                        SCR_CONTROLS, SCR_SLOTS, SCR_DEAD };
 
 constexpr uint32_t TICK_US   = 1000000u / game::TICK_HZ;
 constexpr int      MAX_CATCHUP = 4;    // never simulate more than this per frame
@@ -46,13 +47,29 @@ uint32_t         s_best = 0;
 bool             s_record = false;
 bool             s_sound = false;                 // the pause-card setting, kept in NVS
 ui::Menu         s_menu;
-// The pause card is the only Menu left: the recipe book draws itself now, and
-// draws pictures rather than rows. Five is what openPauseMenu() writes -- one
-// more than fits at once, which is what Menu's scrolling window is for.
-ui::MenuItem     s_items[6];
+// The pause card and the save picker are the only two Menus: the recipe book
+// draws itself now, and draws pictures rather than rows. Seven is what
+// openPauseMenu() writes -- three more than fit at once, which is what Menu's
+// scrolling window is for.
+ui::MenuItem     s_items[7];
 char             s_title[28];                     // menu heading, rebuilt per open
 char             s_soundRow[16];                  // "SOUND: ON", rebuilt on toggle
 char             s_fpsRow[16];                    // "FPS: ON", rebuilt on toggle
+// The save/load picker. Its rows are rebuilt from the card's headers every time
+// it opens, which is why a slot written a second ago already shows its new night
+// and a card pulled out from under it reads EMPTY instead of lying.
+ui::Menu         s_slotMenu;
+ui::MenuItem     s_slotItems[save::SLOT_N];
+// Sized for what snprintf is allowed to print, not for what it will: %d and %u
+// are each up to eleven characters as far as -Wformat-truncation is concerned,
+// and it is right to ask. A silently truncated "NIGHT 100  10 HEA" is the kind
+// of thing that ships.
+char             s_slotLabel[save::SLOT_N][16];
+char             s_slotDetail[save::SLOT_N][40];
+bool             s_slotSaving = false;   // the picker was opened from the pause card
+char             s_slotNote[32];         // the one line under the card: SAVED, NO SD CARD
+bool             s_slotOk = false;       // ...and whether that line is good news
+
 uint32_t         s_tickAccum = 0;
 uint32_t         s_lastUs = 0;
 int              s_lockout = 0;
@@ -297,7 +314,7 @@ const char* cardFoot() {
 // contents and four comes to 127 px of the 135 the panel has. Five items is
 // fine -- the window scrolls and puts a chevron in the margin, which is
 // machinery Menu already has and nothing was using.
-constexpr int PAUSE_ROWS = 6;
+constexpr int PAUSE_ROWS = 7;
 void openPauseMenu() {
   snprintf(s_soundRow, sizeof(s_soundRow), "SOUND: %s", s_sound ? "ON" : "OFF");
   snprintf(s_fpsRow,   sizeof(s_fpsRow),   "FPS: %s",   s_showFps ? "ON" : "OFF");
@@ -305,10 +322,48 @@ void openPauseMenu() {
   s_items[1] = ui::MenuItem{ "CONTROLS",  "what does what", true };
   s_items[2] = ui::MenuItem{ s_soundRow,  nullptr,         true };
   s_items[3] = ui::MenuItem{ s_fpsRow,    "frame counter", true };
-  s_items[4] = ui::MenuItem{ "NEW WORLD", "start over",    true };
-  s_items[5] = ui::MenuItem{ "QUIT",      "back to title", true };
+  s_items[4] = ui::MenuItem{ "SAVE GAME", "to the SD card", true };
+  s_items[5] = ui::MenuItem{ "NEW WORLD", "start over",    true };
+  s_items[6] = ui::MenuItem{ "QUIT",      "back to title", true };
   snprintf(s_title, sizeof(s_title), "PAUSED  NIGHT %u", (unsigned)s_game.night);
   s_menu.open(s_title, s_items, PAUSE_ROWS);
+}
+
+// Builds the picker from the card headers. Called on open and again after a
+// write, so the row a save just landed in shows what was saved without leaving
+// the card.
+void openSlotMenu(bool saving) {
+  s_slotSaving = saving;
+  s_slotNote[0] = 0;
+  s_slotOk = false;
+
+  // Retried each time the picker opens, so a card put in after boot is found.
+  // The three readMeta() calls below are then memoised on the answer.
+  save::reset();
+  const bool card = save::begin();
+  for (int i = 0; i < save::SLOT_N; ++i) {
+    snprintf(s_slotLabel[i], sizeof s_slotLabel[i], "SLOT %d", i + 1);
+
+    save::Meta m;
+    const bool used = card && save::readMeta(i, m) && m.used;
+    if (used) {
+      // Night and hearts, which is what tells two runs of the same age apart.
+      // The score is left off on purpose: it is shown on the title card, and a
+      // row here has one line to say everything in.
+      snprintf(s_slotDetail[i], sizeof s_slotDetail[i], "NIGHT %u  %u HEARTS",
+               (unsigned)m.night, (unsigned)m.hp);
+    } else {
+      snprintf(s_slotDetail[i], sizeof s_slotDetail[i], "%s",
+               card ? "EMPTY" : "NO SD CARD");
+    }
+    // Empty is unselectable when loading -- there is nothing there -- and
+    // selectable when saving, where it means "this one". The window still shows
+    // it either way, because a row that vanished would move the others under
+    // the player's finger.
+    s_slotItems[i] = ui::MenuItem{ s_slotLabel[i], s_slotDetail[i], used || saving };
+  }
+
+  s_slotMenu.open(saving ? "SAVE TO" : "LOAD FROM", s_slotItems, save::SLOT_N);
 }
 
 void startRun() {
@@ -479,6 +534,10 @@ void loop() {
         if (confirm) {
           if (s_titleSel == 0) {
             startRun();
+          } else if (s_titleSel == 1) {
+            openSlotMenu(false);
+            s_scr = SCR_SLOTS;
+            s_lockout = LOCKOUT_FRAMES;
           } else {
             s_ctrlFrom = SCR_TITLE;
             s_scr = SCR_CONTROLS;
@@ -701,12 +760,74 @@ void loop() {
               s_prefs.putBool("fps1", s_showFps);
               openPauseMenu();          // relabel the row; the cursor survives
               break;
-            case 4: startRun(); break;
+            case 4:
+              openSlotMenu(true);
+              s_scr = SCR_SLOTS;
+              s_lockout = LOCKOUT_FRAMES;
+              break;
+            case 5: startRun(); break;
             default:
               ui::rerollSplash(micros());
               s_scr = SCR_TITLE;
               s_lockout = LOCKOUT_FRAMES;
               break;
+          }
+        }
+      }
+      break;
+
+    // Reachable from the title and from the pause card, and it goes back to
+    // whichever opened it. The world is drawn behind it when there is one, for
+    // the same reason the pause card leaves it up: it is what the player is
+    // deciding about.
+    case SCR_SLOTS:
+      if (s_slotSaving) { drawScene(); ui::hud(s_game); }
+      else              render::fill(0);
+      s_slotMenu.draw(menuFoot());
+      if (s_slotNote[0]) {
+        const uint16_t ink = s_slotOk ? render::pack(226, 230, 238)
+                                     : render::pack(128, 136, 152);
+        render::textCentred(render::W / 2, render::H - 12, s_slotNote, ink, 1);
+      }
+      if (!s_lockout) {
+        if (b.navUp)   { s_slotMenu.move(-1); sfx::play(sfx::kMenuMove); }
+        if (b.navDown) { s_slotMenu.move(1);  sfx::play(sfx::kMenuMove); }
+        if (cancel) {
+          s_slotMenu.close();
+          s_scr = s_slotSaving ? SCR_PAUSE : SCR_TITLE;
+          s_lockout = LOCKOUT_FRAMES;
+        } else if (confirm) {
+          const int i = s_slotMenu.index();
+          if (!s_slotItems[i].enabled) {
+            sfx::play(sfx::kCraftFail);
+          } else if (s_slotSaving) {
+            const bool ok = save::write(i, s_game);
+            // openSlotMenu() clears the note, so it is written after: the row
+            // it rebuilds is the confirmation, and the line under the card says
+            // whether it happened at all.
+            openSlotMenu(true);         // relabels the row; the cursor survives
+            if (ok) {
+              snprintf(s_slotNote, sizeof s_slotNote, "SAVED TO SLOT %d", i + 1);
+              s_slotOk = true;
+              sfx::play(sfx::kBuy);
+            } else {
+              snprintf(s_slotNote, sizeof s_slotNote, "%s", save::statusText());
+              sfx::play(sfx::kCraftFail);
+            }
+            s_lockout = LOCKOUT_FRAMES;
+          } else if (save::read(i, s_game)) {
+            s_slotMenu.close();
+            s_record = false;
+            s_scr = SCR_PLAY;
+            s_lockout = LOCKOUT_FRAMES;
+            s_tickAccum = 0;
+            s_lastUs = micros();
+            sfx::play(sfx::kBuy);
+          } else {
+            snprintf(s_slotNote, sizeof s_slotNote, "%s", save::statusText());
+            openSlotMenu(false);
+            s_lockout = LOCKOUT_FRAMES;
+            sfx::play(sfx::kCraftFail);
           }
         }
       }
@@ -805,7 +926,7 @@ void loop() {
       Serial.printf("swing=%d\n", (int)s_game.toolPhase);
     } else if (cmd == 's') {
       static const char* const kName[] = { "title", "play", "pause", "craft",
-                                          "recipes", "controls", "dead" };
+                                          "recipes", "controls", "slots", "dead" };
       // Indexed by the screen, so adding one without a name here would read
       // off the end and hand a wild pointer to the screenshot writer.
       static_assert(sizeof(kName) / sizeof(kName[0]) == SCR_DEAD + 1,

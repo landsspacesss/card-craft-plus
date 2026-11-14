@@ -363,10 +363,10 @@ void title(const char* board, uint32_t best, int sel) {
   snprintf(buf, sizeof(buf), "BEST %u", (unsigned)best);
   render::textCentred(W / 2, 58, buf, C_DIM, 1);
 
-  // Two stops, driven the way every other card in the game is driven: the
+  // Three stops, driven the way every other card in the game is driven: the
   // arrows move and ENTER does the thing. Control hints live on the card behind
   // CONTROLS, where they can be laid out properly.
-  static const char* kRows[TITLE_ROWS] = { "START", "CONTROLS" };
+  static const char* kRows[TITLE_ROWS] = { "START", "LOAD GAME", "CONTROLS" };
   const int rowW = 108, rowH = 16, rowX = (W - rowW) / 2;
   for (int i = 0; i < TITLE_ROWS; ++i) {
     const int ry = 76 + i * (rowH + 4);
