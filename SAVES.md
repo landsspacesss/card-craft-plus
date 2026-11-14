@@ -120,38 +120,33 @@ picker opens, so a card pushed in after boot is found without a reboot.
 
 Upstream pins pioarduino / Arduino core 3.x. M5Cardputer 1.1.1 builds against
 Arduino core **2.0.16** — the EMBER build on this machine proves it — and the
-core-3 platform is a ~1.5 GB download. `platformio-adv.ini` therefore reuses the
-toolchain that already builds and flashes for this board:
+core-3 platform is a ~1.5 GB download. The `[env:adv]` / `[env:adv-selftest]`
+sections at the bottom of `platformio.ini` therefore reuse the toolchain that
+already builds and flashes for this board:
 
 ```
-tools/link-local-libs.sh                      # once, points lib/ at the libraries
-pio run -c platformio-adv.ini -e adv          # firmware
-pio test -c platformio.ini -e native          # host tests (202 cases)
-test/host_sd/run.sh                           # the save layer, on real files
+tools/link-local-libs.sh     # once: points lib/ at the pinned library versions
+pio run  -e adv              # the firmware
+pio run  -e adv-selftest     # the same, plus the boot-time SD self-test
+pio test -e native           # host tests (202 cases)
+test/host_sd/run.sh          # the save layer, on real files (52 assertions)
 ```
 
-Built image: **839,200 B**, flash 25.1%, static RAM 56.6%. The only warnings are
-five that predate this work (three `-Wmisleading-indentation` in `raycast.cpp`,
-one `-Wclass-memaccess` in `render.cpp`, one unused variable in M5GFX).
+Built image: **810,736 B**, flash 24.3%, static RAM 56.6%, md5
+`4a1606e997fc5653fbab3c4052090fce`. **Zero warnings from this work**; five remain
+that predate it (three `-Wmisleading-indentation` in `raycast.cpp`, one
+`-Wclass-memaccess` in `render.cpp`, one unused variable in M5GFX). A clean
+rebuild reproduces the same md5.
 
-Three core-3-isms have to be satisfied for a core-2 build, and all three are
-handled by `build_src_flags = -ffast-math -std=gnu++17` (project sources only,
-so the core and M5GFX keep the standard they were written against):
+One trap worth writing down: do not reintroduce a second `platformio-*.ini`.
+PlatformIO keys `.pio/build` on a checksum of the project configuration, so
+alternating between two config files wipes the build directory -- including the
+environment you were not building.
 
-1. `render::pack()` is a multi-statement `constexpr` (C++14).
-2. `ui::MenuItem` is brace-initialised — an aggregate with default member
-   initialisers is C++14 and later.
-3. `sfx.cpp` `static_assert`s a loop-computed `constexpr`.
-
-The four libraries are **symlinked into `lib/`**, not named in `lib_deps`:
-LDF resolves a *declared* dependency from the registry even when an explicit
-entry of the same name is listed, so `lib_deps` got as far as
-`Installing M5GFX @ >=0.3.0` and stalled at 10% of it. Libraries found in
-`lib/` satisfy those declarations first.
 
 ## Verification
 
-**Host.** `pio test -c platformio.ini -e native` — 51 cases, including five new
+**Host.** `pio test -e native` — 51 cases, including five new
 ones against an in-memory `Sink`/`Source`:
 
 | test | what it pins down |
@@ -179,16 +174,49 @@ headers (`test/host_sd/shim/`) that turn `File` into a `FILE*` rooted at
 | overwrite / erase | the second write is the one that loads; erasing twice is not an error |
 | slot bounds | -1 and `SLOT_N` are refused by every entry point |
 
-**On the board — not done yet.** The image is verified app-only
-(`0xABCD5432` at 0x20, chip id 9) so it installs into any 64 KB-aligned app slot,
-but nothing below has been exercised on hardware — it is the SPI bus and GPIO5
-that no host test can reach:
+**In the emulator (m5stack-esp-emulator, `-M m5cardputeradv`).** The image is
+verified app-only (`0xABCD5432` at 0x20, chip id 9) so it installs into any
+64 KB-aligned app slot. What the emulator established:
 
-- [ ] first `SAVE GAME` writes `/cardcraft/slotN.dat`, size ~66 KB
+| check | result |
+|---|---|
+| boots to the title card | **pass** — `docs/emu/adv-title.png`; the badge reads `CARDPUTER ADV`, so M5GFX's variant detection ran and the panel came up |
+| SD card mounts (SPI + the ADV's GPIO5 slot enable) | **pass** on one boot: `[selftest] mount=1 status=''` |
+| a slot file reaches a real FAT card | **pass**, same boot: `write=1 status=''` |
+| the header reads back | **pass**, same boot: `used=1 night=6 hp=7 score=666 seed=4242` — the values the self-test wrote |
+| load restores the world | **not reached** — that boot died on a stack-canary trip that turned out to be the *self-test's* two `game::State` locals against the 8 KB Arduino task stack; after making them static, every later mount failed with `esp_vfs_fat_register failed 0x(101)` (`ESP_ERR_NO_MEM`) before any card I/O |
+
+Two things in that table are worth more than the passes:
+
+* **A real bug, found and fixed.** The first build of this tree linked M5GFX
+  **0.3.0** and M5Unified **0.3.0** — the unversioned directories in
+  `~/.pio/libdeps` — and it booted to a **black screen**, with
+  `[error] Keyboard: Unsupported board type: 136` on the console. M5Cardputer
+  1.1.1 is written against M5Unified 0.2.x. Pinning M5GFX **0.2.36** and
+  M5Unified **0.2.29**, the pair EMBER's own link map shows, fixes it.
+  `tools/link-local-libs.sh` now pins them explicitly. Without the emulator run
+  this would have gone to the board as a black screen.
+* **`sizeof(game::State)` is 2,604 bytes** and the Arduino loop task has 8,192
+  bytes of stack; after `setup()` there are **5,724 bytes** left. That is the
+  number to check before putting a `State` on the stack.
+
+The emulator's Cardputer-ADV **keyboard does not deliver character keys to the
+guest** — `dot`, `grave_accent`, `tab`, `esc`, `3`, `a`, `spc` and a held `w`
+all do nothing, and neither does writing `/machine/tca8418`'s `key-event`
+property directly — so the save card cannot be driven from the UI there. The SD
+path is therefore exercised by a boot-time self-test (`pio run -e adv-selftest`)
+that calls the same `save::` entry points the pause menu calls. It is not a
+shipping configuration and is never flashed.
+
+**On the board — not done yet.** What is left, on hardware:
+
+- [ ] first `SAVE GAME` writes `/cardcraft/slot1.dat`, **71,946 bytes**
 - [ ] the row comes back as `NIGHT n  h HEARTS` without leaving the card
 - [ ] power-cycle → `LOAD GAME` → the run resumes where it was, including the
       hole that was mined and the torch that was placed
 - [ ] a card pulled mid-save reads `EMPTY`, not `SAVE CORRUPT` (host-verified
       with a write budget; the card-path version is the board's)
-- [ ] emulator: SD image mounted via `storage.sd_image_artifact_id`, save,
-      unmount, remount, load
+- [ ] that the SD stack can mount at all once the two framebuffers are
+      allocated. It did, once, in the emulator, and then reported `NO_MEM` on
+      every later attempt — so this is the riskiest line in the whole feature
+      and the first thing to try on the board

@@ -43,6 +43,7 @@ class SDClass {
   // The card is always present on the host; begin() succeeding is the whole of
   // what the save layer asks of it.
   bool begin(uint8_t, SPIClass&, uint32_t) { return true; }
+  void end() {}
   File open(const char* path, const char* mode);
   bool exists(const char* path);
   bool remove(const char* path);

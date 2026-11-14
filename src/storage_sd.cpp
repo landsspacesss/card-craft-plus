@@ -158,8 +158,22 @@ bool begin() {
   // 25 MHz, then 4. A card that will not train at the fast clock is worth
   // having at the slow one: a save that takes a second is better than a save
   // that does not happen, and nothing here is latency-sensitive.
+  // The fallback needs end() between the two attempts. A failed begin() can
+  // already have registered the FAT VFS at /sd, and the second attempt then
+  // fails with 0x101 (ESP_ERR_INVALID_STATE) whatever the card is doing --
+  // which reports as "no card" for a card that is perfectly fine at the slow
+  // clock. end() unregisters it.
+  // end() first as well as between the attempts. A failed begin() can leave the
+  // FAT VFS registered at /sd, and every later attempt in the same boot then
+  // fails with the same error whatever the card is doing -- which reports as
+  // "no card" for a card that is perfectly fine. This also covers a card
+  // swapped after a failed probe.
+  SD.end();
   bool ok = SD.begin(SD_CS, SPI, 25000000);
-  if (!ok) ok = SD.begin(SD_CS, SPI, 4000000);
+  if (!ok) {
+    SD.end();
+    ok = SD.begin(SD_CS, SPI, 4000000);
+  }
 
   if (ok && !SD.exists(DIR)) ok = SD.mkdir(DIR);
 

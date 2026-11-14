@@ -433,6 +433,10 @@ void drawScene() {
 
 // -----------------------------------------------------------------------------
 
+#ifdef CC_SD_SELFTEST
+void sdSelfTest();          // defined below, beside the code it belongs to
+#endif
+
 void setup() {
   // Before anything else: two contiguous 64.8 KB DMA blocks are the tightest
   // allocation in the program, and the display and keyboard libraries have not
@@ -509,7 +513,153 @@ void setup() {
   s_prefs.putInt("splash", ui::splashIndex());
 
   s_lastUs = micros();
+
+#ifdef CC_SD_SELFTEST
+  sdSelfTest();
+#endif
 }
+
+// =============================================================================
+//  CC_SD_SELFTEST — the SD path, exercised from the firmware itself
+//
+//  Not part of the shipping build: it compiles only with -DCC_SD_SELFTEST, and
+//  it exists because the emulator's Cardputer-ADV keyboard does not deliver
+//  character keys to the guest, so the save card cannot be driven from the UI
+//  there. It calls the same save:: entry points the pause menu calls; nothing
+//  here is a shortcut around them.
+//
+//  boot 1  generate a world from a fixed seed, mine a block and plant a torch,
+//          write slot 1, read its header back, then read the slot into a
+//          DIFFERENT world and check the edits came with it.
+//  boot 2  after a reset, so the SD image is the one boot 1 wrote: read the slot
+//          straight off the card and check the edits are still there.
+//
+//  What this proves that test/host_sd cannot: that SPI and the ADV's GPIO5 slot
+//  enable bring the card up, and that a real FAT filesystem takes the write.
+// =============================================================================
+#ifdef CC_SD_SELFTEST
+
+namespace {
+
+uint32_t worldSig() {
+  uint32_t h = 2166136261u;
+  for (int y = 0; y < world::H; ++y)
+    for (int x = 0; x < world::W; ++x) {
+      h = (h ^ world::height(x, y)) * 16777619u;
+      h = (h ^ world::topMat(x, y)) * 16777619u;
+      h = (h ^ world::light(x, y)) * 16777619u;
+      for (int z = 0; z < world::MAX_H; ++z)
+        h = (h ^ world::blockAt(x, y, z)) * 16777619u;
+    }
+  return h;
+}
+
+}  // namespace
+
+// Defined at namespace scope, not inside the anonymous one above: setup() is a
+// global function (the Arduino core calls it), so a forward declaration made
+// there names an external symbol. An anonymous-namespace definition would give
+// the same identifier internal linkage and the two would not be the same
+// function, which links as "undefined reference to sdSelfTest()".
+void sdSelfTest() {
+  Serial.begin(115200);
+  delay(150);
+
+  const bool secondBoot = s_prefs.getBool("sdtest", false);
+  Serial.printf("\n[selftest] boot=%d\n", secondBoot ? 2 : 1);
+
+  // Two edits a reload has to reproduce: a block out of a column, and a torch
+  // standing on another one.
+  const int hx = world::W / 2, hy = world::H / 2;
+  const int tx = hx + 3, ty = hy + 2;
+
+  world::generate(4242);
+  const int hz = (int)world::height(hx, hy) - 1;
+  Serial.printf("[selftest] generated sig=%08x hole_z=%d\n", worldSig(), hz);
+
+  if (!secondBoot) {
+    uint8_t dm = 0, dn = 0;
+    world::mine(hx, hy, hz, 100000, dm, dn);
+    const bool placed = world::place(tx, ty, (uint8_t)world::B_TORCH);
+    world::rebuildLight();
+    const int tz = (int)world::height(tx, ty) - 1;
+    Serial.printf("[selftest] edited sig=%08x torch_placed=%d at=%d,%d,%d\n",
+                  worldSig(), (int)placed, tx, ty, tz);
+
+    // static, not local: sizeof(game::State) is several kilobytes and the
+    // Arduino loop task has 8 KB of stack. Two of them on the stack is a canary
+    // trip, which is exactly what the first run of this self-test did.
+    static game::State t;
+    game::begin(t, 4242);
+    t.night = 6;
+    t.hp = 7;
+    t.inv[world::B_IRON] = 11;
+
+    // One line per step, flushed: a hang in the SD stack has to say which call
+    // it hung in, because the panic dump that follows names addresses and not
+    // intentions.
+    // A few attempts, each reported: the emulator's SPI card model answers
+    // intermittently under load, and a silent retry would hide that rather than
+    // report it.
+    bool mounted = false;
+    for (int attempt = 1; attempt <= 3 && !mounted; ++attempt) {
+      save::reset();
+      Serial.printf("[selftest] mount attempt %d...\n", attempt); Serial.flush();
+      mounted = save::begin();
+      Serial.printf("[selftest] mount attempt %d = %d status='%s'\n",
+                    attempt, (int)mounted, save::statusText());
+      Serial.flush();
+      if (!mounted) delay(400);
+    }
+
+    Serial.printf("[selftest] write...\n"); Serial.flush();
+    const bool wok = save::write(0, t);
+    Serial.printf("[selftest] write=%d status='%s'\n", (int)wok, save::statusText());
+    Serial.flush();
+
+    save::Meta m;
+    const bool mok = save::readMeta(0, m);
+    Serial.printf("[selftest] meta=%d used=%d night=%u hp=%u score=%u seed=%u\n",
+                  (int)mok, (int)m.used, (unsigned)m.night, (unsigned)m.hp,
+                  (unsigned)m.score, (unsigned)m.seed);
+
+    // ...and back into a world that is not the one that was saved.
+    world::generate(999);
+    static game::State t2;
+    game::begin(t2, 999);
+    const uint32_t before = worldSig();
+    const bool rok = save::read(0, t2);
+    const bool edits = !world::solidAt(hx, hy, hz)
+                    && world::blockAt(tx, ty, tz) == world::B_TORCH;
+    Serial.printf("[selftest] read=%d status='%s' seed=%u\n",
+                  (int)rok, save::statusText(), world::currentSeed());
+    Serial.printf("[selftest] after_load sig=%08x (was %08x) edits=%d night=%u hp=%u iron=%u\n",
+                  worldSig(), before, (int)edits, (unsigned)t2.night,
+                  (unsigned)t2.hp, (unsigned)t2.inv[world::B_IRON]);
+    s_prefs.putBool("sdtest", true);
+  } else {
+    static game::State t2;
+    const bool rok = save::read(0, t2);
+    save::Meta m;
+    const bool mok = save::readMeta(0, m);
+    const bool edits = !world::solidAt(hx, hy, hz)
+                    && world::blockAt(tx, ty, (int)world::height(tx, ty) - 1) == world::B_TORCH;
+    Serial.printf("[selftest] reboot read=%d status='%s' meta=%d used=%d night=%u hp=%u seed=%u\n",
+                  (int)rok, save::statusText(), (int)mok, (int)m.used,
+                  (unsigned)m.night, (unsigned)m.hp, world::currentSeed());
+    Serial.printf("[selftest] reboot after_load sig=%08x edits=%d night=%u hp=%u iron=%u\n",
+                  worldSig(), (int)edits, (unsigned)t2.night, (unsigned)t2.hp,
+                  (unsigned)t2.inv[world::B_IRON]);
+  }
+
+  Serial.printf("[selftest] sd_ready=%d state_bytes=%u stack_free=%u free_heap=%u\n",
+                (int)save::ready(), (unsigned)sizeof(game::State),
+                (unsigned)uxTaskGetStackHighWaterMark(nullptr), (unsigned)ESP.getFreeHeap());
+  Serial.printf("[selftest] done\n");
+  Serial.flush();
+}
+
+#endif  // CC_SD_SELFTEST
 
 void loop() {
 #ifdef SHOW_FPS
