@@ -86,8 +86,9 @@ instead of quietly writing a save that restores the wrong bytes into the wrong
 field. `STATE_BLOB_VERSION` is the version of the *shape*; bump it when it
 changes and old saves read as `DIFFERENT BUILD` rather than as garbage.
 
-Typical file size: **~66 KB** (64,528 B of grid plus two bytes of marker per
-marker in use). Three slots is under 200 KB.
+**Measured on a real save: 71,946 bytes.** 64,528 B of grid, two bytes a marker
+(a generated world uses about 1,700 of them), 16 B of simulation header and
+`sizeof(State)` — a little under 3 KB. Three slots is under 220 KB.
 
 ## Failure behaviour
 
@@ -123,9 +124,15 @@ core-3 platform is a ~1.5 GB download. `platformio-adv.ini` therefore reuses the
 toolchain that already builds and flashes for this board:
 
 ```
+tools/link-local-libs.sh                      # once, points lib/ at the libraries
 pio run -c platformio-adv.ini -e adv          # firmware
-pio test -c platformio.ini -e native          # host tests
+pio test -c platformio.ini -e native          # host tests (202 cases)
+test/host_sd/run.sh                           # the save layer, on real files
 ```
+
+Built image: **839,200 B**, flash 25.1%, static RAM 56.6%. The only warnings are
+five that predate this work (three `-Wmisleading-indentation` in `raycast.cpp`,
+one `-Wclass-memaccess` in `render.cpp`, one unused variable in M5GFX).
 
 Three core-3-isms have to be satisfied for a core-2 build, and all three are
 handled by `build_src_flags = -ffast-math -std=gnu++17` (project sources only,
@@ -155,14 +162,33 @@ ones against an in-memory `Sink`/`Source`:
 | `test_snapshot_refuses_a_truncated_stream` | a short stream fails the load; a sink that stops accepting bytes fails the save instead of reporting a length it did not write |
 | `test_snapshot_restores_the_marker_pool` | the pool comes back to the same size — a load that leaked a marker a column would pass the cell comparisons and still run the board out of pool after a few saves |
 
+**The save layer, against real files.** `test/host_sd/run.sh` compiles
+`src/storage_sd.cpp` against shim `Arduino.h` / `SD.h` / `SPI.h` / `M5Cardputer.h`
+headers (`test/host_sd/shim/`) that turn `File` into a `FILE*` rooted at
+`$HOST_SD_ROOT`, then drives the whole layer. 52 assertions, all passing:
+
+| test | what it pins down |
+|---|---|
+| save → meta → load | header fields and the score agree with what was written; the reloaded grid hashes identically and the seed is the one saved |
+| missing slot | an absent file is not a used slot and does not load |
+| foreign magic | patched to `0x11223344` → reads as EMPTY, and `read()` leaves the world **untouched** |
+| other build | `STATE_BLOB_VERSION + 1` → `ST_VERSION`, world untouched |
+| flipped payload byte | one byte in the occupancy grid → `ST_CORRUPT`, world untouched — the checksum is verified *before* anything is applied |
+| truncated file | 100 bytes short → refused, world untouched |
+| interrupted write | a write budget of 30,000 B → `write()` returns false, **the file is gone**, and the slot reads EMPTY rather than corrupt |
+| overwrite / erase | the second write is the one that loads; erasing twice is not an error |
+| slot bounds | -1 and `SLOT_N` are refused by every entry point |
+
 **On the board — not done yet.** The image is verified app-only
 (`0xABCD5432` at 0x20, chip id 9) so it installs into any 64 KB-aligned app slot,
-but nothing below has been exercised on hardware:
+but nothing below has been exercised on hardware — it is the SPI bus and GPIO5
+that no host test can reach:
 
 - [ ] first `SAVE GAME` writes `/cardcraft/slotN.dat`, size ~66 KB
 - [ ] the row comes back as `NIGHT n  h HEARTS` without leaving the card
 - [ ] power-cycle → `LOAD GAME` → the run resumes where it was, including the
       hole that was mined and the torch that was placed
-- [ ] a card pulled mid-save reads `EMPTY`, not `SAVE CORRUPT`
-- [ ] `emulator`: SD image mounted via `storage.sd_image_artifact_id`, save,
+- [ ] a card pulled mid-save reads `EMPTY`, not `SAVE CORRUPT` (host-verified
+      with a write budget; the card-path version is the board's)
+- [ ] emulator: SD image mounted via `storage.sd_image_artifact_id`, save,
       unmount, remount, load

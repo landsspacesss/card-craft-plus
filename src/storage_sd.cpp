@@ -83,6 +83,14 @@ void slotPath(int slot, char* out, int cap) {
 
 bool slotInRange(int slot) { return slot >= 0 && slot < SLOT_N; }
 
+// Remade before every write rather than only at mount. Mounting is memoised, so
+// a directory removed from under a mounted card -- which a host test does
+// deliberately, and a card reader on a desktop can do by accident -- would
+// otherwise fail every save for the rest of the boot with nothing to say.
+void ensureDir() {
+  if (!SD.exists(DIR)) SD.mkdir(DIR);
+}
+
 // ---- streaming --------------------------------------------------------------
 //
 // The two ends of world::Sink / world::Source. Both halves of a save -- the
@@ -206,6 +214,7 @@ bool readMeta(int slot, Meta& m) {
 
 bool write(int slot, const game::State& s) {
   if (!slotInRange(slot) || !begin()) return false;
+  ensureDir();
   char path[48];
   slotPath(slot, path, sizeof path);
 
