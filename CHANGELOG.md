@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- A **SETTINGS** card on the pause menu: brightness (10-100%), field of view
+  (60-90 degrees), and, on the Cardputer ADV, the gyroscope. All four values
+  live in NVS and come back after a reboot. See `SETTINGS.md`.
+- **Tilt to look.** The ADV's BMI270 drives yaw and pitch alongside the keys,
+  with a deadband, three sensitivity levels, and a half-second calibration that
+  removes the sensor's resting offset. Off by default: it costs power and, until
+  calibrated, drifts.
+- The **field of view** is a setting instead of two constants. It still keeps a
+  block square on screen, because the projection is derived from the camera
+  plane rather than kept beside it.
+- Gyro rates are integrated in the fixed-timestep simulation (`game::Input`),
+  not in the frame loop, so the look path is covered by the host tests.
+
 ## 1.0.1
 
 - The keyboard no longer allocates while a key is held. Reading the key state

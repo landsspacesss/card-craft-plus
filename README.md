@@ -64,7 +64,9 @@ Right hand moves, left hand acts.
 | Confirm, back | `ENTER`, `ESC` |
 
 There is a **CONTROLS** card in the game as well, on the title screen and in
-the pause menu.
+the pause menu, and a **SETTINGS** card behind it: brightness, field of view, and
+— on the Cardputer ADV — tilt-to-look with the built-in gyroscope. See
+[`SETTINGS.md`](SETTINGS.md).
 
 ## Install
 

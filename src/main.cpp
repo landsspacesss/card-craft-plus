@@ -426,6 +426,90 @@ const char* settingsFoot() {
   return foot;
 }
 
+#ifdef CRAFTCRAFT_EMU_TOUR
+// ---- the emulator tour ------------------------------------------------------
+//
+// Not part of the shipping build. QEMU's Cardputer-ADV keyboard delivers no
+// character keys to the guest -- ` and ; and . all vanish -- so the settings card
+// cannot be opened or driven there the way a player drives it, and a screenshot
+// of it would otherwise be impossible. This walks a shot list instead and says
+// so on the serial line, which is what the capture script waits for.
+//
+// The two look shots need CRAFTCRAFT_GYRO_FAKE as well: QEMU does not model the
+// BMI270, so without an injected rate they would both be the resting view.
+constexpr int TOUR_SHOT_FRAMES = 150;   // long enough for a picture, short enough to sit through
+
+static const char* const kTourName[] = { "settings",    "bright-10", "bright-100",
+                                         "fov-60",      "fov-90",    "play-rest",
+                                         "gyro-yaw",    "gyro-pitch" };
+constexpr int TOUR_SHOTS = (int)(sizeof(kTourName) / sizeof(kTourName[0]));
+
+void startRun();   // defined below, beside the other screen transitions
+
+void tourApply() {
+  saveSettings();
+  applySettings(true);
+  openSettings();
+}
+
+void tourEnter(int n) {
+  switch (n) {
+    case 0:   // the card at its shipped defaults
+      s_cfg = settings::Settings{};
+      s_calib = 0;
+      if (s_scr != SCR_SETTINGS) startRun();
+      applySettings(true);
+      openSettings();
+      s_scr = SCR_SETTINGS;
+      s_lockout = 0;
+      break;
+    case 1: s_cfg.brightnessPct = settings::kBrightnessMin; tourApply(); break;
+    case 2: s_cfg.brightnessPct = settings::kBrightnessMax; tourApply(); break;
+    case 3: s_cfg.fovDeg = settings::kFovMin;               tourApply(); break;
+    case 4: s_cfg.fovDeg = settings::kFovMax;               tourApply(); break;
+    case 5:   // the same view without the gyro, as the reference for the two below
+      motion::fakeSet(0.0f, 0.0f);
+      s_cfg.gyroOn = false;
+      s_game.angle = 0.0f;
+      s_game.pitch = (float)raycast::HORIZON;
+      applySettings(true);
+      s_scr = SCR_PLAY;
+      s_lockout = 0;
+      break;
+    case 6:   // ...and turning on the spot, at about the speed a hand would
+      motion::fakeSet(40.0f, 0.0f);
+      s_cfg.gyroOn = true;
+      applySettings(true);
+      s_scr = SCR_PLAY;
+      s_lockout = 0;
+      break;
+    default:  // ...and tilting the far edge down to look up
+      motion::fakeSet(0.0f, 25.0f);
+      s_cfg.gyroOn = true;
+      applySettings(true);
+      s_scr = SCR_PLAY;
+      s_lockout = 0;
+      break;
+  }
+}
+
+void tourTick() {
+  static int shot = -1;
+  static int frames = 0;
+  if (frames == 0) {
+    ++shot;
+    if (shot >= TOUR_SHOTS) {
+      shot = TOUR_SHOTS - 1;      // hold the last one; the session is not over
+    } else {
+      Serial.printf("TOUR %d %s\n", shot, kTourName[shot]);
+      tourEnter(shot);
+    }
+  }
+  ++frames;
+  if (frames >= TOUR_SHOT_FRAMES) frames = 0;
+}
+#endif  // CRAFTCRAFT_EMU_TOUR
+
 // Builds the picker from the card headers. Called on open and again after a
 // write, so the row a save just landed in shows what was saved without leaving
 // the card.
@@ -771,6 +855,9 @@ void loop() {
 #ifdef SHOW_FPS
   const uint32_t frameStart = micros();
   static uint32_t s_prevFrame = 0;
+#endif
+#ifdef CRAFTCRAFT_EMU_TOUR
+  tourTick();
 #endif
 
   hal::update();
