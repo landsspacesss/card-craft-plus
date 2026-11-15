@@ -409,8 +409,11 @@ void openSettings() {
 
   s_setItems[0] = ui::MenuItem{ s_setBright, "10-100 percent",  true };
   s_setItems[1] = ui::MenuItem{ s_setFov,    "60-90 degrees",   true };
-  s_setItems[2] = ui::MenuItem{ s_setGyro,   "tilt to look",
-                                !(s_cfg.gyroOn && !motion::available()) };
+  // GYRO stays selectable even when it reads NO SENSOR: that is the only way
+  // back to OFF, and a greyed row that still answers to ENTER is worse than an
+  // honest one. The two rows below it are the ones that go dead, because there
+  // is nothing for them to do without a sensor.
+  s_setItems[2] = ui::MenuItem{ s_setGyro,   "tilt to look",   true };
   s_setItems[3] = ui::MenuItem{ s_setSens,   "low med high",    haveGyro };
   s_setItems[4] = ui::MenuItem{ s_setCal,    "hold still",      haveGyro };
   s_setMenu.open("SETTINGS", s_setItems, 5);

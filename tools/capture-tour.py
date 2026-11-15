@@ -127,11 +127,31 @@ def main():
 
         # NVS persistence: the tour saved brightness and FOV through the same
         # saveSettings() the card does, so a reset has to bring them back.
+        #
+        # The boot line has already been printed once, so this waits for a
+        # SECOND one rather than for the string: the serial buffer is appended
+        # to across a QMP system_reset, and matching the first line would pass
+        # without the guest ever having rebooted.
         before = serial_text(args.api, sid)
-        mark = len(before)
+        seen = before.count("settings:")
         _request(args.api, "POST", f"/sessions/{sid}/reset", {})
-        text, at = wait_for(args.api, sid, "settings:", timeout=120, start=0)
-        line = text[at:text.find("\n", at)].strip()
+        line = ""
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            text = serial_text(args.api, sid)
+            fresh = text.count("settings:") > seen
+            rewound = len(text) < len(before) and text.count("settings:") >= 1
+            if fresh or rewound:
+                at = text.rfind("settings:")
+                end = text.find("\n", at)
+                if end < 0:
+                    time.sleep(0.2)   # half a line is not a reading
+                    continue
+                line = text[at:end].strip()
+                break
+            time.sleep(0.3)
+        if not line:
+            raise SystemExit("no settings line after the reset")
         print(f"after reset: {line}", flush=True)
         (out / "nvs-persistence.txt").write_text(
             "Settings survive a reset (the tour wrote them through the card's own\n"
