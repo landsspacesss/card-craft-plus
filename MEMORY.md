@@ -86,3 +86,30 @@ than faulting — which is why both margins are printed every half second.
 The frame-rate figures in the same line are meaningless under QEMU (the emulator
 does not model instruction timing); only the memory and stack figures are read
 from this run.
+
+## What a new feature costs, concretely
+
+Read off the structures themselves, not estimated. Static figures are RAM; flash
+figures come out of the 2.5 MB that is free.
+
+| Adding | Static RAM | Flash | Catch |
+|---|---:|---:|---|
+| **A new block material** | **+1,536 B** | +512 B | `render::s_shade` is 1,024 B per material, `s_edge`/`s_bevel` 128 B each, `s_tex` 256 B; texels are 256 B each (another 256 if it has a distinct top). **But `B_COUNT` is already 16**, which is the whole of what the 4-bit surface-material field in `g_cell` holds — a seventeenth material means repacking that byte first |
+| **A new mob kind** | 0 | art only | The kind is an index into `sprites::kMobArt`; `Mob` is 56 B each and there are already 24 of them inside `State` |
+| **More mobs on screen** | **+56 B each** | — | `MAX_MOBS` is 24. `State` is the save blob, so changing it changes the save format (`STATE_BLOB_VERSION`) |
+| **More dropped items** | +36 B each | — | `MAX_DROPS` is 16 |
+| **More particles** | +36 B each | — | `MAX_PARTICLES` is 160, already 5,760 B |
+| **A new recipe** | 0 | ~a few bytes | The table is const; the enum gains a byte |
+| **A new sound** | 0 | the PCM itself | The bank is const in flash — `kDawn` is 14.4 KB, `kExplode` 12.8 KB |
+| **A bigger map** | **+4 B per column** | — | 96×96 is 36,864 B; 128×128 would be 65,536 (+28.7 KB). Worldgen time and the save blob grow with it too |
+
+Two rules fall out of this:
+
+1. **Content is cheap, state is not.** Blocks, recipes, sounds and mob art live
+   in flash. What lives in RAM is the world grid, the shading tables, and
+   `game::State` — and `State` is also the save format, so growing it is a
+   compatibility decision, not just a memory one.
+2. **The 16-material ceiling is a packing limit, not a budget one.** There is
+   RAM for more blocks; the blocker is the 4-bit field. Repacking `g_cell` (move
+   the light nibble, widen the material field) is the prerequisite, and it
+   touches the save format as well.
