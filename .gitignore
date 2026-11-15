@@ -7,3 +7,6 @@ __pycache__/
 
 # generated sound previews — the committed header is the build input
 tools/sfx-preview/
+
+# the M5Stack library trees, symlinked by tools/link-local-libs.sh
+lib/
