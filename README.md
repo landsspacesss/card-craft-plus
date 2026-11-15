@@ -115,9 +115,18 @@ One build runs on both the Cardputer and the Cardputer ADV.
 ### Prebuilt
 
 Each [release](https://github.com/landsspacesss/card-craft-plus/releases) carries
-one app-only image, `cardcraft-plus.bin`, for the Cardputer ADV: install it into
-any app slot at least 816,800 bytes with Launcher's file manager. It is not a
-merged image — no partition table, no bootloader, nothing to erase first.
+three files:
+
+| File | What it is | How to use it |
+|---|---|---|
+| `cardcraft-plus.bin` | app-only, 816,800 B | install it into any app slot at least that size with Launcher's file manager. No partition table, no bootloader, nothing to erase first |
+| `cardcraft-plus-full.bin` | the whole 8 MB flash: bootloader, partition table, app, and erased NVS/OTA areas | write it at `0x0` — `esptool write_flash 0x0 cardcraft-plus-full.bin`. It boots to the title card on a Cardputer ADV (see `docs/emu/full-image-boot.png`) |
+| `launcher-3.0.0-cardputer.bin` | **unmodified upstream** [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher) 3.0.0 (MIT), a merged image | to put Launcher back: write it at `0x0`. Not this project's code, and not modified here |
+
+The full image is padded with `0xFF` to the chip's whole 8 MB, so writing it at
+`0x0` also clears the OTA-selection and NVS areas. That matters: the game keeps
+its settings and save-slot bookkeeping in NVS, and a stale `otadata` from another
+firmware would make the bootloader pick a slot this image does not have.
 
 ### Building this fork
 

@@ -161,6 +161,7 @@ takes a branch that queues nothing the guest ever sees).
 | `play-rest.png` | the reference view, gyro off |
 | `gyro-yaw.png` | the same place after a faked 40 °/s yaw: the view has turned, and nothing else on the panel changed |
 | `gyro-pitch.png` | ...and after a faked 25 °/s pitch: looking up, clamped by the same rows the keys use |
+| `full-image-boot.png` | the whole-flash image from the release, booting to the title card (the 8 MB padded image, not the app-only one) |
 | `nvs-after-reset.png` | the card after the session was reset — **100% / 90° read back out of NVS** (the write happens in the `gyro-raw` shot, with the card up, because that is where this emulator delivers a keypress) |
 
 The persistence shot is deliberately not circular: the tour's last shot is the
