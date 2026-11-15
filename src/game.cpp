@@ -1967,6 +1967,9 @@ uint32_t tick(State& s, const Input& in) {
   const float turn = TURN_SPEED / (float)TICK_HZ;
   if (in.left)  s.angle -= turn;
   if (in.right) s.angle += turn;
+  // The gyro adds to the same angle the keys move, so a player can steer with
+  // one and correct with the other without either cancelling the other.
+  s.angle += in.gyroYaw / (float)TICK_HZ;
   raycast::setAngle(s.cam, s.angle);
 
   // Pitch is a horizon offset, not a rotation — see raycast::Camera. One key
@@ -1974,7 +1977,9 @@ uint32_t tick(State& s, const Input& in) {
   // no third key to spare can still recentre.
   {
     const float step = PITCH_SPEED / (float)TICK_HZ;
-    float h = s.pitch;
+    // Tilt first, then the keys: a player holding ENTER to recentre means it,
+    // and the gyro must not win that argument by adding a row after the reset.
+    float h = s.pitch + in.gyroPitch / (float)TICK_HZ;
     if (in.lookCentre || (in.lookUp && in.lookDown)) {
       h = (float)raycast::HORIZON;
     } else if (in.lookUp) {

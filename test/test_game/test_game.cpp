@@ -2797,6 +2797,64 @@ static void test_mobs_spawn_on_the_ground_not_on_your_roof(void) {
   TEST_ASSERT_TRUE(checked > 0);
 }
 
+// ---- the gyroscope ----------------------------------------------------------
+
+// Gyro rates ride in on Input rather than being integrated at the frame level,
+// so the whole path -- rate, dt, clamp, camera -- is a host test. This is why
+// they are rows per second and radians per second and not rows and radians:
+// whatever supplies them does not know the tick rate, and must not.
+
+static void test_gyro_yaw_turns_the_camera_at_the_given_rate(void) {
+  State s = fresh();
+  Input in;
+  in.gyroYaw = 1.0f;                                   // rad/s
+  for (int i = 0; i < TICK_HZ; ++i) tick(s, in);       // one second
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.0f, s.angle);
+  // ...and the camera direction is still a unit vector, which is the thing a
+  // bug in the integration would quietly break.
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.0f, s.cam.dx * s.cam.dx + s.cam.dy * s.cam.dy);
+}
+
+static void test_gyro_pitch_is_clamped_at_the_same_limit_the_keys_are(void) {
+  State s = fresh();
+  Input in;
+  in.gyroPitch = 320.0f;                                  // as fast as the keys (PITCH_SPEED)
+  for (int i = 0; i < 10 * TICK_HZ; ++i) tick(s, in);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, (float)(raycast::HORIZON + raycast::PITCH_UP), s.pitch);
+  in.gyroPitch = -320.0f;
+  for (int i = 0; i < 20 * TICK_HZ; ++i) tick(s, in);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, (float)(raycast::HORIZON - raycast::PITCH_DOWN), s.pitch);
+}
+
+// A board with no sensor, or the gyro switched off, hands in zeroes. Zero is a
+// no-op -- not a slow drift, and not a NaN that spreads into the camera.
+static void test_zero_gyro_rates_leave_the_view_exactly_where_it_was(void) {
+  State s = fresh();
+  s.angle = 0.25f;
+  s.pitch = 40.0f;
+  raycast::setAngle(s.cam, s.angle);
+  raycast::setPitch(s.cam, 40);
+  Input in;
+  for (int i = 0; i < 2 * TICK_HZ; ++i) tick(s, in);
+  TEST_ASSERT_EQUAL_FLOAT(0.25f, s.angle);
+  TEST_ASSERT_EQUAL_FLOAT(40.0f, s.pitch);
+}
+
+// The sensor's full scale is 2000 deg/s, and a flick gets close to it. Whatever
+// arrives, the state has to stay finite and inside the limits it is clamped to.
+static void test_a_full_scale_flick_stays_finite_and_normalised(void) {
+  State s = fresh();
+  Input in;
+  in.gyroYaw = 2000.0f * 3.14159265f / 180.0f;
+  in.gyroPitch = 5000.0f;
+  for (int i = 0; i < 10 * TICK_HZ; ++i) tick(s, in);
+  TEST_ASSERT_TRUE(isfinite(s.angle));
+  TEST_ASSERT_TRUE(isfinite(s.pitch));
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.0f, s.cam.dx * s.cam.dx + s.cam.dy * s.cam.dy);
+  TEST_ASSERT_TRUE(s.pitch <= (float)(raycast::HORIZON + raycast::PITCH_UP) + 0.01f);
+  TEST_ASSERT_TRUE(s.pitch >= (float)(raycast::HORIZON - raycast::PITCH_DOWN) - 0.01f);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_day_turns_to_night_on_schedule);
@@ -2913,5 +2971,9 @@ int main(int, char**) {
   RUN_TEST(test_the_spark_ring_never_overflows);
   RUN_TEST(test_effects_do_not_disturb_the_simulation);
   RUN_TEST(test_degenerate_input);
+  RUN_TEST(test_gyro_yaw_turns_the_camera_at_the_given_rate);
+  RUN_TEST(test_gyro_pitch_is_clamped_at_the_same_limit_the_keys_are);
+  RUN_TEST(test_zero_gyro_rates_leave_the_view_exactly_where_it_was);
+  RUN_TEST(test_a_full_scale_flick_stays_finite_and_normalised);
   return UNITY_END();
 }

@@ -217,6 +217,17 @@ struct Input {
   // launch the player four times off one press. The rising edge is latched in
   // State::jumpHeld instead, which the simulation sees exactly once.
   bool jump = false;
+
+  // Gyroscope rates, already deadbanded and scaled by whatever read them.
+  // Radians per second for the angle, horizon rows per second for the pitch.
+  //
+  // Rates rather than deltas, and integrated here rather than at the frame
+  // level, for the same reason the pitch keys are applied here: s.angle and
+  // s.pitch are the simulation's, and tick() rebuilds the camera from them
+  // every step -- so anything that moved the camera from outside would be
+  // overwritten by the next tick. It also puts the whole path under the host
+  // tests, which a sensor cannot be.
+  float gyroYaw = 0.0f, gyroPitch = 0.0f;
 };
 
 // One-shot things that happened during a tick. main.cpp turns these into
