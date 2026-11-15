@@ -49,7 +49,7 @@ constexpr float TURN_SPEED    = 2.7f;    // radians/second
 //
 // It was 6.6, and 6.6 was not chosen for feel — it was the smallest number the
 // geometry allowed. At the resting tilt the aim ray leaves the eye at EYE = 1.2
-// and descends TILT / PROJ = 0.1875 per cell, so the crosshair meets flat
+// and descends TILT / proj() per cell -- 0.1875 at the default FOV -- so it meets flat
 // ground 6.40 cells out, 6.51 from the eye; anything shorter cannot reach the
 // floor it is pointing at. Reach was pinned to that, and the cost was a player
 // who could pull a block out of a cliff face from most of seven cells away.

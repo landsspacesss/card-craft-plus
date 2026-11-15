@@ -66,9 +66,10 @@ void    setFovDeg(uint8_t deg);
 // value; boards with keys to spare shear away from it (see Camera::horizon).
 //
 // TILT and EYE decide how far ahead the crosshair meets flat ground at rest:
-// EYE * PROJ / TILT, about 6.4 cells as set. Steeper puts the target closer but
-// eats the sky a six-block tower has to show against; shallower pushes it out
-// of reach.
+// EYE * proj() / TILT rows-to-cells, about 6.3 at the default field of view. It
+// follows the FOV with the projection, so a narrow view reaches further and a
+// wide one shorter. Steeper puts the target closer but eats the sky a six-block
+// tower has to show against; shallower pushes it out of reach.
 constexpr int TILT = 30;
 constexpr int HORIZON = VIEW_H / 2 - TILT;
 
@@ -190,7 +191,7 @@ struct Camera {
   float px, py;             // position, in grid cells
   float z;                  // eye height, absolute world units
   float dx, dy;             // unit direction
-  float planeX, planeY;     // camera plane, perpendicular to dir, length PLANE_LEN
+  float planeX, planeY;     // camera plane, perpendicular to dir, length planeLen()
 
   // Looking up and down is a y-shear, not a rotation: every row simply projects
   // further from a horizon that has moved. That is what makes it nearly free,

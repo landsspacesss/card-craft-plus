@@ -62,14 +62,18 @@ bool begin();
 // Started and usable. False after a failed begin() and after end().
 bool available();
 
-// Stops sampling and puts the part to sleep. The sensor stays powered -- it
-// shares the keyboard's I2C bus and has no enable pin -- but it stops
-// interrupting anything and stops being read, which is what the setting buys.
+// Stops sampling and puts the part to sleep, whoever started it. The sensor
+// stays powered -- it shares the keyboard's I2C bus and has no enable pin -- but
+// it stops interrupting anything and stops being read, which is what the setting
+// buys. The directly-addressed path can only stop being read: this library
+// version's BMI270 driver does not implement sleep().
 void end();
 
 // Averages about half a second of a still board into the zero-rate offset. Only
-// meaningful while nobody is touching it; the card says so on screen.
-void calibrate();
+// meaningful while nobody is touching it; the card says so on screen. False if
+// it could not get enough samples to claim one, which the card reports as FAIL
+// rather than as a success nobody checked.
+bool calibrate();
 
 // Rates in deg/s with the calibrated offset removed. False when there is
 // nothing to read, in which case the references are untouched.

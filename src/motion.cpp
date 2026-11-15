@@ -78,6 +78,12 @@ bool begin() {
   s_asleep = false;
   return true;
 #else
+  // Already sampling: return, and do not touch the part. applySettings() calls
+  // this on every settings change, and on the directly-addressed path a real
+  // begin() soft-resets the sensor and re-uploads its 8 KB configuration --
+  // about a fifth of a second, per keypress -- as well as replacing the object.
+  if (s_ok && !s_asleep) return true;
+
   if (s_asleep) {
     // sleep() leaves _imu set, so isEnabled() still says yes while the part is
     // powered down. Start over instead of trusting it.
@@ -104,6 +110,11 @@ bool begin() {
     Serial.println("motion: gyro via M5Unified");
     return true;
   }
+
+  // A previous direct attempt that has since been slept: drop it before making
+  // another, or the object it points at leaks once per wake-up.
+  delete s_direct;
+  s_direct = nullptr;
 
   // The addresses disagree between sources, so both are tried rather than
   // guessed: 0x68 first, because that is the part's powered-up default.
@@ -135,13 +146,19 @@ void end() {
   s_asleep = true;
   return;
 #else
-  if (!s_ok) return;
+  if (s_asleep) return;
+  // Deliberately not gated on s_ok. M5.begin() starts the IMU itself when the
+  // internal one is enabled and In_I2C came up, so with the setting off and
+  // begin() never called there is still a sensor sampling -- which is the one
+  // this is meant to be saving power on.
+  //
   // The BMI270 driver in this library does not implement IMU_Base::sleep(), so
-  // the directly-addressed path can only stop being read. The M5Unified one
+  // the directly-addressed path can only stop being read; the M5Unified one
   // does, and that is the path a board this old usually takes.
   if (s_src == Src::DIRECT && s_direct != nullptr) s_direct->sleep();
-  else                                             M5.Imu.sleep();
+  else if (M5.Imu.isEnabled())                     M5.Imu.sleep();
   s_asleep = true;
+  s_ok = false;
 #endif
 }
 
@@ -167,13 +184,13 @@ bool readRates(float& yawDps, float& pitchDps) {
 #endif
 }
 
-void calibrate() {
-  if (!s_ok || s_asleep) return;
+bool calibrate() {
+  if (!s_ok || s_asleep) return false;
 
 #ifdef CRAFTCRAFT_GYRO_FAKE
   s_biasYaw = 0.0f;
   s_biasPitch = 0.0f;
-  return;
+  return true;
 #else
   float yaw[CAL_SAMPLES];
   float pitch[CAL_SAMPLES];
@@ -189,11 +206,12 @@ void calibrate() {
     }
     delay(CAL_GAP_MS);
   }
-  if (n < CAL_SAMPLES / 2) return;   // not enough samples to claim a calibration
+  if (n < CAL_SAMPLES / 2) return false;   // not enough samples to claim one
   s_biasYaw   = averageBias(yaw, n);
   s_biasPitch = averageBias(pitch, n);
   Serial.printf("motion: bias %.2f / %.2f dps from %d samples\n",
                 (double)s_biasYaw, (double)s_biasPitch, n);
+  return true;
 #endif
 }
 

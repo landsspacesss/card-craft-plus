@@ -49,13 +49,15 @@ The third step is not a second driver: this library version already carries the
 BMI270's 8 KB initialisation blob, and a second copy of it is how a gyro ends up
 half-configured.
 
-If all three fail, `GYRO` reads `NO SENSOR`, the row cannot be toggled, and the
-two rows that depend on it are greyed. The game plays exactly as before.
+If all three fail, `GYRO` reads `NO SENSOR` and the two rows that depend on it
+are greyed. The row itself still toggles, because that is the only way back to
+`OFF`. The game plays exactly as before.
 
-**Off means off.** `motion::end()` calls `M5.Imu.sleep()` and stops sampling, so
-a player who never turns it on pays nothing at runtime. (`m5::BMI270_Class` does
-not implement `sleep()` in this library version, so the directly-addressed path
-can only stop being read.)
+**Off means off.** `motion::end()` stops sampling and sleeps whatever is
+running — deliberately not just what `begin()` started, because M5Unified's own
+`M5.begin()` starts the IMU on this board and that sensor is the one worth
+sleeping. (`m5::BMI270_Class` does not implement `sleep()` in this library
+version, so the directly-addressed fallback can only stop being read.)
 
 **Calibration.** A BMI270 at rest reads 0.5–9 °/s of zero-rate offset, which is
 hundreds of pixels a second of drift at these sensitivities. `CALIBRATE` averages
@@ -126,13 +128,13 @@ that build against the Device Service and writes `docs/emu/`:
 
 | File | Shows |
 |---|---|
-| `settings.png` | the card, five rows, at the shipped defaults |
-| `bright-10.png`, `bright-100.png` | the two ends of the backlight |
+| `settings.png` | the card at the shipped defaults (five rows; four fit, so the last is behind the chevron) |
+| `bright-10.png`, `bright-100.png` | the two ends of the backlight, **as the card reports them**: the emulator's frame is the framebuffer, and a backlight is a register, so the pixels cannot dim |
 | `fov-60.png`, `fov-90.png` | the two ends of the field of view |
 | `play-rest.png` | the reference view, no gyro |
 | `gyro-yaw.png` | the same place after a faked 40 °/s yaw |
 | `gyro-pitch.png` | ...and after a faked 25 °/s pitch, looking up |
-| `nvs-persistence.txt` | the boot line after a session reset, reading the settings back |
+| `nvs-after-reset.png` | the same card after the session was reset — it reads 100% / 90° back out of NVS |
 
 ## What still needs the real board
 

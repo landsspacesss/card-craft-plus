@@ -47,19 +47,20 @@ void test_brightness_and_fov_are_quantised(void) {
   TEST_ASSERT_EQUAL_UINT8(75, s.fovDeg);          // nearest 5 degrees
 }
 
-void test_fov_keeps_squares_square(void) {
-  for (uint8_t f = settings::kFovMin; f <= settings::kFovMax; f += settings::kFovStep) {
-    const float plane = settings::fovPlaneLen(f);
-    const float proj  = settings::fovProj(f);
-    // A cube is square on screen when the horizontal scale is VIEW_W/2 / plane,
-    // so this product is the panel's half-width and nothing else.
-    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.0f, plane * proj / 120.0f);
-    TEST_ASSERT_TRUE(plane > 0.5f && plane < 1.05f);
-  }
-  // 75 degrees is a touch wider than the 0.75 the game shipped with, and the
-  // projection follows it instead of staying at 160.
-  TEST_ASSERT_FLOAT_WITHIN(0.02f, 0.767f, settings::fovPlaneLen(75));
-  TEST_ASSERT_FLOAT_WITHIN(0.5f, 156.4f, settings::fovProj(75));
+// Review Focus 5: the lowest setting still has to be a lit panel, because the
+// card that would fix it is drawn on that panel. The floor lives in sanitize(),
+// so this pins the two together -- a floor with a mapping that reaches zero is
+// the same black screen with more steps.
+void test_the_lowest_brightness_is_still_a_lit_panel(void) {
+  settings::Settings s;
+  s.brightnessPct = 0;                    // what a bad write could leave behind
+  settings::sanitize(s);
+  TEST_ASSERT_EQUAL_UINT8(settings::kBrightnessMin, s.brightnessPct);
+  TEST_ASSERT_EQUAL_UINT8(25, settings::brightnessDuty(s));   // 10 * 255 / 100
+  TEST_ASSERT_TRUE(settings::brightnessDuty(s) > 0);
+
+  s.brightnessPct = 100;
+  TEST_ASSERT_EQUAL_UINT8(255, settings::brightnessDuty(s));
 }
 
 int main(int, char**) {
@@ -68,6 +69,6 @@ int main(int, char**) {
   RUN_TEST(test_default_brightness_matches_the_old_fixed_160);
   RUN_TEST(test_decode_clamps_garbage_to_something_usable);
   RUN_TEST(test_brightness_and_fov_are_quantised);
-  RUN_TEST(test_fov_keeps_squares_square);
+  RUN_TEST(test_the_lowest_brightness_is_still_a_lit_panel);
   return UNITY_END();
 }

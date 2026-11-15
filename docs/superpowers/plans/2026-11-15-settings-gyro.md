@@ -39,9 +39,9 @@
 
 1. **NVS 里是脏值**（旧固件写的、上次写到一半断电）：`br=0`、`fov=255`、`gs=9` 都不能让开机黑屏或 FOV 变 NaN。→ Task 1 的 `settings::decode` 测试。
 2. **改了 FOV 但活着的相机没重建**：屏幕上的方块变扁、准星与命中点错位。→ Task 2 的 `setFovDeg` + `setPitch/setAngle` 测试。
-3. **陀螺仪开着但没有传感器**（I2C 探测失败）：视角不能自己乱转或卡死。→ Task 4 的 `available()` 与 Task 6 的 `gyroYaw/gyroPitch == 0` 时状态不变测试。
-4. **极快手速**（±2000 °/s）：`s.pitch` 必须被限幅在 `HORIZON±PITCH_UP/DOWN`，`s.angle` 不能溢出成 NaN/inf，相机方向向量保持单位长度。→ Task 6 的 clamp/NaN 测试。
-5. **亮度调到 10%**：设置页本身还要能读（黑屏等于回不去）。→ Task 7 的 10%/100% 对比截图，且 Task 5 保证亮度永不写到 0。
+3. **陀螺仪开着但没有传感器**（I2C 探测失败）：视角不能自己乱转或卡死。→ Task 4 的 `available()` 与 Task 5 的 `gyroYaw/gyroPitch == 0` 时状态不变测试。
+4. **极快手速**（±2000 °/s）：`s.pitch` 必须被限幅在 `HORIZON±PITCH_UP/DOWN`，`s.angle` 不能溢出成 NaN/inf，相机方向向量保持单位长度。→ Task 5 的 clamp/NaN 测试。
+5. **亮度调到 10%**：设置页本身还要能读（黑屏等于回不去）。→ Task 1 的亮度下限测试与 Task 7 的 10%/100% 对比截图。
 
 ---
 

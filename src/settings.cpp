@@ -3,10 +3,6 @@
 // =============================================================================
 #include "settings.h"
 
-#include <math.h>
-
-#include "raycast.h"
-
 namespace settings {
 
 static uint8_t clampTo(uint8_t v, uint8_t lo, uint8_t hi) {
@@ -47,14 +43,6 @@ uint8_t brightnessDuty(const Settings& s) {
   // and a black screen with no way back to the card.
   const uint16_t duty = (uint16_t)s.brightnessPct * 255u / 100u;
   return duty == 0 ? 1 : (uint8_t)duty;
-}
-
-float fovPlaneLen(uint8_t deg) {
-  return tanf((float)deg * 0.5f * 3.14159265f / 180.0f);
-}
-
-float fovProj(uint8_t deg) {
-  return (float)(raycast::VIEW_W / 2) / fovPlaneLen(deg);
 }
 
 }  // namespace settings

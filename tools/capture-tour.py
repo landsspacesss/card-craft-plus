@@ -30,11 +30,11 @@ from pathlib import Path
 SHOTS = ["settings", "bright-10", "bright-100", "fov-60", "fov-90",
          "play-rest", "gyro-yaw", "gyro-pitch"]
 
-# The tour holds each shot for six seconds of the guest's wall clock (see
-# TOUR_SHOT_MS), and QEMU's virtual clock tracks real time even when the guest
-# only manages a frame every second or two -- so the capture is scheduled in
-# seconds and samples the middle of each shot. Frame counting would drift with
-# the machine's load, which is the one thing that is not stable here.
+# The tour holds each shot for SHOT_SECONDS of the guest's wall clock (see
+# TOUR_SHOT_MS in src/main.cpp), and QEMU's virtual clock tracks real time even
+# when the guest only manages a frame every second or two -- so the capture is
+# scheduled in seconds and samples the middle of each shot. Frame counting would
+# drift with the machine's load, which is the one thing that is not stable here.
 SHOT_SECONDS = 12.0
 
 
@@ -57,36 +57,11 @@ def _request(api, method, path, body=None, content_type="application/json"):
     return json.loads(raw) if raw else {}
 
 
-def serial_text(api, sid):
-    """The whole serial buffer. Read from zero every poll rather than tracking an
-    offset: the buffer is small, a reset rewinds it, and an offset that outlives
-    a reset is one more thing that can be wrong."""
-    resp = _request(api, "GET", f"/sessions/{sid}/serial?offset=0&limit=200000")
-    data = resp.get("data", "")
-    if isinstance(data, list):
-        data = "".join(data)
-    return data
-
-
-def wait_for(api, sid, needle, timeout, start=0):
-    """Wait until the serial buffer contains `needle` at or after `start`."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        text = serial_text(api, sid)
-        at = text.find(needle, start)
-        if at >= 0:
-            return text, at
-        time.sleep(0.2)
-    raise SystemExit(f"timed out waiting for {needle!r}")
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--api", default="http://127.0.0.1:8798")
     ap.add_argument("--bin", required=True, help="merged image to run")
     ap.add_argument("--out", default="docs/emu")
-    ap.add_argument("--settle", type=float, default=1.4,
-                    help="seconds to let a shot render before the frame is taken")
     args = ap.parse_args()
 
     out = Path(args.out)

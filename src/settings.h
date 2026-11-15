@@ -55,12 +55,8 @@ Settings decode(uint8_t br, uint8_t fov, uint8_t gyr, uint8_t gs);
 // What the panel's backlight is actually asked for, 0..255.
 uint8_t brightnessDuty(const Settings& s);
 
-// tan(halfFov) — the camera plane's half-width, and the one number a field of
-// view really is.
-float fovPlaneLen(uint8_t deg);
-
-// Pixels per world unit at distance 1. Derived from the plane so that a block
-// stays square: the horizontal scale is (VIEW_W/2)/plane and this must match it.
-float fovProj(uint8_t deg);
+// The field of view is turned into a camera plane by raycast::setFovDeg(); the
+// mapping lives there because that is the only place it is used, and a second
+// copy here would be a copy the tests check instead of the one that runs.
 
 }  // namespace settings

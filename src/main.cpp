@@ -463,19 +463,10 @@ void tourApply() {
 void tourEnter(int n) {
   switch (n) {
     case 0: {
-      // One NVS write, before the card is drawn, and then the card reads it
-      // back through the real loadSettings(). That is the persistence evidence:
-      // what is on screen at 100% and 90 degrees came out of flash, not out of
-      // the variable that was just set.
-      //
-      // One write and not one per shot, because a flash commit under QEMU costs
-      // ten or twenty seconds: a card that saved on every keypress would make
-      // the shot schedule meaningless, and the schedule is the only clock this
-      // build has.
-      s_cfg = settings::Settings{};
-      s_cfg.brightnessPct = settings::kBrightnessMax;
-      s_cfg.fovDeg = settings::kFovMax;
-      saveSettings();
+      // Whatever flash holds, read through the real loadSettings(): defaults on
+      // a session that has never saved, and the saved 100% / 90 degrees after
+      // the reset below. Deliberately NOT a write -- a card that wrote here and
+      // then photographed itself would prove nothing about persistence.
       loadSettings();
       s_calib = 0;
       if (s_scr != SCR_SETTINGS) startRun();
@@ -505,13 +496,21 @@ void tourEnter(int n) {
       s_scr = SCR_PLAY;
       s_lockout = 0;
       break;
-    default:  // ...and tilting the far edge down to look up
+    default: {   // ...and tilting the far edge down to look up
+      // The one flash write of the whole tour, at the end. A commit under QEMU
+      // costs ten or twenty seconds, so it must not sit in the middle of the
+      // shot schedule; and it has to happen BEFORE the reset for the picture
+      // after it to be evidence. Shot 0 is what reads it back.
+      s_cfg.brightnessPct = settings::kBrightnessMax;
+      s_cfg.fovDeg = settings::kFovMax;
+      saveSettings();
       motion::fakeSet(0.0f, 25.0f);
       s_cfg.gyroOn = true;
       applySettings(true);
       s_scr = SCR_PLAY;
       s_lockout = 0;
       break;
+    }
   }
 }
 
@@ -1270,7 +1269,7 @@ void loop() {
           // says HOLD STILL, and this frame's present is what puts it on the
           // panel before the read loop starts blocking.
           s_calib = 1;
-          s_calibFrames = 2;
+          s_calibFrames = 12;      // a fifth of a second of HOLD STILL on screen
           openSettings();
           s_lockout = LOCKOUT_FRAMES;
         }
@@ -1291,8 +1290,7 @@ void loop() {
       if (s_calib == 1) {
         if (s_calibFrames > 0) --s_calibFrames;
         if (s_calibFrames == 0) {
-          motion::calibrate();
-          s_calib = motion::available() ? 2 : 3;
+          s_calib = motion::calibrate() ? 2 : 3;
           s_calibFrames = 90;
           openSettings();
         }
