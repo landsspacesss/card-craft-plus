@@ -124,17 +124,29 @@ renderer once per pass.
 `pio run -e adv-tour` builds the game plus a shot list (`CRAFTCRAFT_EMU_TOUR`)
 and a fake gyro (`CRAFTCRAFT_GYRO_FAKE`), because the emulator's keyboard cannot
 open the card and QEMU does not model the BMI270. `tools/capture-tour.py` drives
-that build against the Device Service and writes `docs/emu/`:
+that build against the Device Service and writes `docs/emu/`.
+
+The tour advances on **ENTER**, not on a clock. A clock was tried twice and
+cannot work: the panel endpoint serves the last frame the guest actually finished
+drawing, and under load that is many seconds behind, so a schedule photographs
+whichever shot the guest last completed. ENTER is the one key this emulator does
+deliver (and it needs `hold_seconds` on the request — without it the service
+takes a branch that queues nothing the guest ever sees).
 
 | File | Shows |
 |---|---|
-| `settings.png` | the card at the shipped defaults (five rows; four fit, so the last is behind the chevron) |
-| `bright-10.png`, `bright-100.png` | the two ends of the backlight, **as the card reports them**: the emulator's frame is the framebuffer, and a backlight is a register, so the pixels cannot dim |
-| `fov-60.png`, `fov-90.png` | the two ends of the field of view |
-| `play-rest.png` | the reference view, no gyro |
-| `gyro-yaw.png` | the same place after a faked 40 °/s yaw |
-| `gyro-pitch.png` | ...and after a faked 25 °/s pitch, looking up |
-| `nvs-after-reset.png` | the same card after the session was reset — it reads 100% / 90° back out of NVS |
+| `settings.png` | the card at the shipped defaults (five rows; four fit, so CALIBRATE is behind the chevron) |
+| `bright-10.png`, `bright-100.png` | the two ends of the backlight, **as the card reports them** — the emulator's frame is the framebuffer and a backlight is a register, so the pixels themselves cannot dim |
+| `fov-60.png`, `fov-90.png` | the two ends of the field of view: the label and the world behind the card, which is drawn from the same camera |
+| `play-rest.png` | the reference view, gyro off |
+| `gyro-yaw.png` | the same place after a faked 40 °/s yaw: the view has turned, and nothing else on the panel changed |
+| `gyro-pitch.png` | ...and after a faked 25 °/s pitch: looking up, clamped by the same rows the keys use |
+| `nvs-after-reset.png` | the card after the session was reset — **100% / 90° read back out of NVS** |
+
+The persistence shot is deliberately not circular: the tour's last shot is the
+only one that calls `saveSettings()`, so the picture after the reset is either
+the saved values (flash held them) or the 60% / 75° defaults (it did not). Shot 0
+never writes.
 
 ## What still needs the real board
 
