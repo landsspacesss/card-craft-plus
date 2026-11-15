@@ -19,7 +19,9 @@
 #include <Arduino.h>
 #include <math.h>
 #include <Preferences.h>
+#ifdef CC_NET_PROBE
 #include <WiFi.h>
+#endif
 #include <esp_heap_caps.h>
 
 #include "game.h"
