@@ -16,6 +16,10 @@
 //  with the face it is on reads as a solid blob, not a world.
 // =============================================================================
 #include "render.h"
+
+#ifdef DEV_SERIAL
+#include <xtensa/hal.h>
+#endif
 #ifdef DEV_SERIAL
 #include "esp_cpu.h"
 #endif
@@ -712,6 +716,14 @@ drawFloorSpan(uint16_t* p, const raycast::Span& s,
         }
         #undef FLOOR_SAMPLE_AT
 }
+
+#ifdef DEV_SERIAL
+// Cycle counts for the per-column cost. The IDF 5 helper is not in the 4.4 tree
+// this board builds against, so the Xtensa HAL is asked directly -- it is the
+// same register, and core 2's own Arduino builds live on it.
+static inline uint32_t cpuCycles() { return (uint32_t)xthal_get_ccount(); }
+#define esp_cpu_get_cycle_count cpuCycles
+#endif
 
 static void drawColumns(const raycast::Camera& cam, int selX, int selY, int selZ,
                         int xStart, int stride) {

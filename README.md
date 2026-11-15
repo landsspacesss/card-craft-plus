@@ -40,6 +40,9 @@ Everything upstream has, plus:
   [m5stack-esp-emulator](https://github.com/m5agent/m5stack-esp-emulator) Device
   Service, writing `docs/emu/`. That is how the settings card's screenshots and
   the save-card write were verified without a hand on the device.
+- **Memory figures on the record.** [`MEMORY.md`](MEMORY.md) has the flash,
+  static DRAM, heap and stack numbers as measured, plus a `pio run -e adv-dev`
+  target that prints them while the game runs.
 - **Host tests** for the parts with no hardware in them: the world grid, the
   raycaster, the survival simulation, the settings arithmetic, the gyro mapping,
   and the save layer against real files.

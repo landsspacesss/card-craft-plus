@@ -28,12 +28,19 @@ void begin() {
   // nobody is listening for is dropped instead, which is the right trade for
   // telemetry, and capture() below borrows a real timeout back for the one
   // thing that genuinely needs delivery.
+#if ARDUINO_USB_CDC_ON_BOOT
+  // Only the CDC-backed Serial has this. A UART build blocks on its own TX
+  // buffer instead, and there is no such buffer to fill: the telemetry here is
+  // a few hundred bytes a second.
   Serial.setTxTimeoutMs(0);
+#endif
 }
 
 void capture(const char* name) {
+#if ARDUINO_USB_CDC_ON_BOOT
   // A frame has to arrive whole, so this is the one place that may wait.
   Serial.setTxTimeoutMs(SHOT_TX_MS);
+#endif
   const uint16_t* buf = render::buildBuffer();
   Serial.printf("<<SHOT %s %d %d be\n", name, render::W, render::H);
   // In chunks: the CDC endpoint is 64 bytes and a single 64 KB write stalls
@@ -47,7 +54,9 @@ void capture(const char* name) {
   }
   Serial.print("\n>>SHOT\n");
   Serial.flush();
+#if ARDUINO_USB_CDC_ON_BOOT
   Serial.setTxTimeoutMs(0);      // back to never blocking the game
+#endif
 }
 
 }  // namespace shot
