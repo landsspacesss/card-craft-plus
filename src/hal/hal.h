@@ -95,6 +95,12 @@ struct Caps {
 
 void          begin();
 LGFX_Device&  display();
+
+// Backlight, 0..255. A settings value rather than a constant now, but still a
+// board property: what "bright" means is the panel's business, not the game's.
+// The caller keeps it well away from 0 -- a dark panel has no card on it to
+// turn the brightness back up with.
+void setBrightness(uint8_t duty);
 void          update();        // pump board input, once per frame
 const Buttons& buttons();
 const Caps&   caps();

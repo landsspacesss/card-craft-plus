@@ -95,6 +95,8 @@ void begin() {
 
 LGFX_Device& display() { return M5Cardputer.Display; }
 
+void setBrightness(uint8_t duty) { M5Cardputer.Display.setBrightness(duty); }
+
 void update() {
   M5Cardputer.update();
   auto& kb = M5Cardputer.Keyboard;
