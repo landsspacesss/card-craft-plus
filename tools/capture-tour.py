@@ -30,12 +30,12 @@ from pathlib import Path
 SHOTS = ["settings", "bright-10", "bright-100", "fov-60", "fov-90",
          "play-rest", "gyro-yaw", "gyro-pitch"]
 
-# The tour holds each shot for SHOT_SECONDS of the guest's wall clock (see
-# TOUR_SHOT_MS in src/main.cpp), and QEMU's virtual clock tracks real time even
-# when the guest only manages a frame every second or two -- so the capture is
-# scheduled in seconds and samples the middle of each shot. Frame counting would
-# drift with the machine's load, which is the one thing that is not stable here.
-SHOT_SECONDS = 12.0
+# The tour advances on ENTER and on nothing else (see tourTick in src/main.cpp):
+# a wall clock cannot work here, because the panel endpoint serves the last frame
+# the guest actually finished drawing and under load that can be many seconds
+# behind. So this presses ENTER once per shot and photographs afterwards, waiting
+# for the frame to change rather than assuming it has.
+ENTER_KEYS = ("ret", "enter")
 
 
 def _request(api, method, path, body=None, content_type="application/json"):
@@ -55,6 +55,51 @@ def _request(api, method, path, body=None, content_type="application/json"):
     if path.endswith("frame.png"):
         return raw
     return json.loads(raw) if raw else {}
+
+
+def _get_frame(api, sid):
+    try:
+        return _request(api, "GET", f"/sessions/{sid}/frame.png")
+    except SystemExit:
+        return None
+
+
+def _wait_for_drawing(api, sid, timeout=120):
+    """Wait until the panel has more than a blank frame on it."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        frame = _get_frame(api, sid)
+        if frame and len(frame) > 1000:
+            return frame
+        time.sleep(0.5)
+    raise SystemExit("guest never drew a frame (boot watchdog under load?)")
+
+
+def _wait_for_change(api, sid, previous, timeout=90):
+    """Wait until the panel shows something other than `previous`."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        frame = _get_frame(api, sid)
+        if frame and frame != previous and len(frame) > 1000:
+            return frame
+        time.sleep(0.5)
+    raise SystemExit("the guest stopped redrawing; nothing to photograph")
+
+
+def _press_enter(api, sid):
+    """ENTER, under whichever name this service uses for it."""
+    last_error = None
+    for key in ENTER_KEYS:
+        try:
+            # hold_seconds is not decoration: without it the service takes a
+            # different branch that queues nothing the guest ever sees.
+            _request(api, "POST", f"/sessions/{sid}/input",
+                     {"kind": "key", "key": key, "action": "tap",
+                      "hold_seconds": 0.2})
+            return
+        except SystemExit as exc:
+            last_error = exc
+    raise SystemExit(f"could not press ENTER: {last_error}")
 
 
 def main():
@@ -81,53 +126,42 @@ def main():
     print(f"session {sid} on {args.api}", flush=True)
 
     captured = {}
+    last = b""
     try:
-        # The tour starts on the first guest frame, so the schedule is anchored
-        # to the first frame that is not the boot screen. Everything after that
-        # is fixed offsets: sample the middle of each six-second shot.
-        # The tour's first act, before anything is drawn, is to enter shot 0 --
-        # so the first frame that is not the blank panel already IS the settings
-        # card. A blank 240x135 PNG compresses to a kilobyte or two; the card
-        # does not.
-        # A blank 240x135 PNG is a few hundred bytes; anything past 1 KB has
-        # pixels in it. If nothing but blank arrives for 45 s the guest died on
-        # the way up -- the Arduino core's clock switch trips the interrupt
-        # watchdog under a loaded host, which is a QEMU artefact and not this
-        # firmware -- and the whole session is worth starting again.
-        deadline = time.time() + 45
-        while time.time() < deadline:
-            try:
-                frame = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
-            except SystemExit:
-                time.sleep(0.4)      # no framebuffer yet
-                continue
-            if len(frame) > 1000:
-                break
-            time.sleep(0.5)
-        else:
-            raise SystemExit("guest never drew a frame (boot watchdog)")
-        t0 = time.time()
-        print(f"tour started (first frame after boot at {time.strftime('%H:%M:%S')})",
-              flush=True)
+        blank = _wait_for_drawing(args.api, sid)
+        print("guest is drawing", flush=True)
+        last = blank
 
         for i, name in enumerate(SHOTS):
-            target = t0 + i * SHOT_SECONDS + SHOT_SECONDS * 0.5
-            time.sleep(max(0.0, target - time.time()))
-            png = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
+            if i == 0:
+                # Shot 0 is already on the panel: the tour enters it before the
+                # first frame is drawn, so there is nothing to change from.
+                frame = last
+            else:
+                _press_enter(args.api, sid)
+                frame = _wait_for_change(args.api, sid, last, timeout=90)
+            # One more frame, so the photograph is of a settled state rather than
+            # of the frame the change happened on.
+            time.sleep(1.0)
+            frame = _get_frame(args.api, sid) or frame
             path = out / f"{name}.png"
-            path.write_bytes(png)
+            path.write_bytes(frame)
             captured[name] = path
-            print(f"  {name}: {len(png)} bytes", flush=True)
+            last = frame
+            print(f"  {name}: {len(frame)} bytes", flush=True)
 
-        # Persistence, in the picture rather than on a serial line: the tour
-        # saved brightness and FOV through the card's own saveSettings(), and
-        # shot 0 reads NVS back. After a reset the card has to show 100% / 90.
-        _request(args.api, "POST", f"/sessions/{sid}/reset", {})
-        time.sleep(3.0 * SHOT_SECONDS)   # the tour's one flash write stalls boot
-        png = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
-        path = out / "nvs-after-reset.png"
-        path.write_bytes(png)
-        print(f"  nvs-after-reset: {len(png)} bytes", flush=True)
+            if name == "gyro-pitch":
+                # Persistence, and not circular: this shot is the one that saves
+                # 100% / 90 degrees to NVS. A reset then boots the tour again,
+                # shot 0 reads NVS, and the card has to show the saved values.
+                _request(args.api, "POST", f"/sessions/{sid}/reset", {})
+                time.sleep(2.0)
+                _wait_for_drawing(args.api, sid, timeout=180)
+                frame = _wait_for_change(args.api, sid, b"", timeout=180)
+                path = out / "nvs-after-reset.png"
+                path.write_bytes(frame)
+                captured["nvs-after-reset"] = path
+                print(f"  nvs-after-reset: {len(frame)} bytes", flush=True)
     finally:
         try:
             _request(args.api, "DELETE", f"/sessions/{sid}")

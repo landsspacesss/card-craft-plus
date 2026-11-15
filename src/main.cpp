@@ -440,10 +440,6 @@ const char* settingsFoot() {
 //
 // The two look shots need CRAFTCRAFT_GYRO_FAKE as well: QEMU does not model the
 // BMI270, so without an injected rate they would both be the resting view.
-// Wall clock, not frames. QEMU on a loaded machine renders a frame every second
-// or two, so a shot measured in frames is a shot that lasts minutes; measured in
-// milliseconds it is the same six seconds on the bench as on the desk.
-constexpr uint32_t TOUR_SHOT_MS = 12000;
 
 static const char* const kTourName[] = { "settings",    "bright-10", "bright-100",
                                          "fov-60",      "fov-90",    "play-rest",
@@ -514,20 +510,23 @@ void tourEnter(int n) {
   }
 }
 
-void tourTick() {
+// Advances on ENTER, and only on ENTER.
+//
+// Tried twice on a clock first, and a clock cannot work here: QEMU renders this
+// game at a frame every few seconds under load, the panel endpoint serves the
+// last frame that was actually drawn, and a schedule in wall-clock seconds
+// therefore photographs whichever shot the guest last managed to finish. ENTER
+// is the one key this emulator does deliver, and it makes the sequence
+// hand-cranked: one press, one shot, and the harness photographs after each.
+void tourTick(bool advance) {
   static int shot = -1;
-  static uint32_t shotStart = 0;
-  const uint32_t now = millis();
-  if (shot < 0 || now - shotStart >= TOUR_SHOT_MS) {
-    shotStart = now;
-    if (shot + 1 < TOUR_SHOTS) {
-      ++shot;
-      Serial.printf("TOUR %d %s\n", shot, kTourName[shot]);
-      tourEnter(shot);
-    }
-    // Past the last shot it simply stays there: the session is the capture
-    // script's, and a card that reset itself to shot 0 would be a page that
-    // changes under the camera.
+  if (shot >= TOUR_SHOTS - 1) return;      // hold the last one; the session is the harness's
+  if (shot < 0 || advance) {
+    ++shot;
+    Serial.printf("TOUR %d %s\n", shot, kTourName[shot]);
+    tourEnter(shot);
+    // The card behind this must not also act on the key that changed the shot.
+    s_lockout = LOCKOUT_FRAMES;
   }
 }
 #endif  // CRAFTCRAFT_EMU_TOUR
@@ -878,12 +877,12 @@ void loop() {
   const uint32_t frameStart = micros();
   static uint32_t s_prevFrame = 0;
 #endif
-#ifdef CRAFTCRAFT_EMU_TOUR
-  tourTick();
-#endif
 
   hal::update();
   const hal::Buttons& b = hal::buttons();
+#ifdef CRAFTCRAFT_EMU_TOUR
+  tourTick(b.confirmEdge);
+#endif
   if (s_lockout) --s_lockout;
   const bool confirm = (s_lockout == 0) && b.confirmEdge;
   const bool cancel  = (s_lockout == 0) && b.cancelEdge;
