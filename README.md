@@ -112,6 +112,13 @@ pio run -e cardputer -t upload
 
 One build runs on both the Cardputer and the Cardputer ADV.
 
+### Prebuilt
+
+Each [release](https://github.com/landsspacesss/card-craft-plus/releases) carries
+one app-only image, `cardcraft-plus.bin`, for the Cardputer ADV: install it into
+any app slot at least 816,800 bytes with Launcher's file manager. It is not a
+merged image — no partition table, no bootloader, nothing to erase first.
+
 ### Building this fork
 
 The fork's own env is `adv` (ESP32-S3, Arduino core 2.0.16), because that is what
