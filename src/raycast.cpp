@@ -22,6 +22,30 @@ namespace raycast {
 
 static float s_camX[VIEW_W];   // 2*x/VIEW_W - 1, constant for the panel
 
+// The field of view in force. Two numbers, one writer: setFovDeg() is the only
+// thing that touches either, so they cannot drift apart the way the pair of
+// constants they replaced could if someone changed one and not the other.
+static uint8_t s_fovDeg   = 74;                 // what PLANE_LEN_DEFAULT is, rounded
+static float   s_planeLen = PLANE_LEN_DEFAULT;
+
+float   planeLen() { return s_planeLen; }
+float   proj()     { return (float)(VIEW_W / 2) / s_planeLen; }
+uint8_t fovDeg()   { return s_fovDeg; }
+
+void setFovDeg(uint8_t deg) {
+  if (deg < FOV_MIN_DEG) deg = FOV_MIN_DEG;
+  if (deg > FOV_MAX_DEG) deg = FOV_MAX_DEG;
+  s_fovDeg   = deg;
+  s_planeLen = tanf((float)deg * 0.5f * 3.14159265f / 180.0f);
+}
+
+// The slope through a screen row, which is what a pitch shear is. Not an angle:
+// rows and pixels are the units the renderer works in, and converting twice
+// would only lose the agreement between the reticle and the aim ray.
+float slopeFor(int horizon) {
+  return (float)(VIEW_H / 2 - horizon) / proj();
+}
+
 // A cheap deterministic wobble per block. Without it a six-high stone column
 // is one flat grey slab covering a quarter of the panel, which is the single
 // most artificial thing about a world with no textures.
@@ -47,8 +71,8 @@ void setPitch(Camera& cam, int horizon) {
 void setAngle(Camera& cam, float angle) {
   cam.dx = cosf(angle);
   cam.dy = sinf(angle);
-  cam.planeX = -cam.dy * PLANE_LEN;   // rotate dir by +90 degrees, then scale
-  cam.planeY =  cam.dx * PLANE_LEN;
+  cam.planeX = -cam.dy * planeLen();  // rotate dir by +90 degrees, then scale
+  cam.planeY =  cam.dx * planeLen();
 }
 
 // A ray exactly parallel to an axis has an infinite step along the other one.
@@ -255,7 +279,10 @@ int castColumn(const Camera& cam, int x, int selX, int selY, int selZ,
   int bucket = 0;
   float dNear = 0.0f;
   uint8_t enterFace = F_NS;
-  float invNear = PROJ / 0.02f;
+  // One read of the field of view for the whole column: it cannot change inside
+  // a frame, and the walker's inner loops want a register, not a call.
+  const float projPx = proj();
+  float invNear = projPx / 0.02f;
 
   for (int stepN = 0; stepN < MAX_STEPS; ++stepN) {
     while (bucket < ZBUCKETS && (float)bucket * ZBUCKET_SPAN <= dNear) {
@@ -280,7 +307,7 @@ int castColumn(const Camera& cam, int x, int selX, int selY, int selZ,
     const uint8_t wallU = (uint8_t)(wall * 255.0f);
 
     const float df = dFar < 0.02f ? 0.02f : dFar;
-    const float invFar = PROJ / df;
+    const float invFar = projPx / df;
     const uint16_t qn = (uint16_t)(dNear * 256.0f > 65535.0f ? 65535.0f : dNear * 256.0f);
     const uint16_t qf = (uint16_t)(df * 256.0f > 65535.0f ? 65535.0f : df * 256.0f);
 
@@ -369,7 +396,10 @@ int castColumn(const Camera& cam, int x, int selX, int selY, int selZ,
       // MAX_DIST this is 16 * 9 * 4096 / 160 = 3686, so the uint16 has better
       // than sixteen times the headroom it needs. The assert is what says so if
       // MAX_DIST is ever raised past 160 cells.
-      static_assert((double)(textures::TEX_N << 12) * MAX_DIST / PROJ < 65536.0,
+      // PROJ_MIN, not the current projection: a static_assert cannot see a
+      // runtime value, and the widest FOV is the one that produces the biggest
+      // step per row, so bounding that bounds every setting.
+      static_assert((double)(textures::TEX_N << 12) * MAX_DIST / PROJ_MIN < 65536.0,
                     "vStepQ12 must fit a uint16 at the far clip");
       const uint16_t vStepQ12 =
           (uint16_t)((float)(textures::TEX_N << 12) / invNear);

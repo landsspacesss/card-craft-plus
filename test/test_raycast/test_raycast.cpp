@@ -73,7 +73,7 @@ static void test_pitch_keeps_the_aim_ray_under_the_reticle(void) {
   Camera c = atSpawn(0.0f);
   for (int h = HORIZON - PITCH_DOWN; h <= HORIZON + PITCH_UP; ++h) {
     setPitch(c, h);
-    const float row = (float)c.horizon + c.aimSlope * PROJ;
+    const float row = (float)c.horizon + c.aimSlope * proj();
     TEST_ASSERT_FLOAT_WITHIN(0.01f, (float)crosshairRow(), row);
   }
 }
@@ -366,7 +366,7 @@ static void test_the_selection_is_one_block_not_a_column(void) {
       if (res.selGeoY0 >= res.selGeoY1) continue;
       const float dist = (float)spans[0].distQ8 / 256.0f;
       if (dist > 0.5f)
-        TEST_ASSERT_TRUE((float)(res.selGeoY1 - res.selGeoY0) < 2.0f * PROJ / dist);
+        TEST_ASSERT_TRUE((float)(res.selGeoY1 - res.selGeoY0) < 2.0f * proj() / dist);
     }
   }
   TEST_ASSERT_TRUE(views > 4);
@@ -520,7 +520,7 @@ static void test_aim_lands_within_reach_on_flat_ground(void) {
   const float d = sqrtf(((float)hit.x + 0.5f - c.px) * ((float)hit.x + 0.5f - c.px)
                       + ((float)hit.y + 0.5f - c.py) * ((float)hit.y + 0.5f - c.py));
   TEST_ASSERT_TRUE(d < 7.0f);
-  const float expected = EYE * PROJ / (float)TILT;
+  const float expected = EYE * proj() / (float)TILT;
   TEST_ASSERT_TRUE(fabsf(d - expected) < 1.5f);
 }
 
@@ -972,7 +972,7 @@ static void test_a_wall_span_maps_one_tile_per_block(void) {
       // instead of sitting on it.
       //
       const float dist = (float)s2.distQ8 / 256.0f;
-      const float rowsPerBlock = PROJ / dist;
+      const float rowsPerBlock = proj() / dist;
       const float tile = (float)(16 << 12);
       // Two quantisations, not one. The step's own truncation is worth up to
       // rowsPerBlock of the product; and the exact distance it was built from is
@@ -1139,6 +1139,50 @@ static void test_flat_faces_carry_no_texture_step(void) {
   TEST_ASSERT_TRUE(tops > 0);
 }
 
+
+// ---- field of view ----------------------------------------------------------
+
+// The field of view used to be two compile-time constants that had to agree.
+// It is a setting now, so the pair moves together and the square-on-screen
+// property is what proves they still agree.
+static void test_setFovDeg_updates_plane_and_proj_together(void) {
+  setFovDeg(60);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.5774f, planeLen());        // tan(30)
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, 207.8f, proj());             // 120/0.5774
+  setFovDeg(90);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.0f, planeLen());           // tan(45)
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, 120.0f, proj());
+  setFovDeg(75);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.7673f, planeLen());
+  // Out of range is clamped, not accepted: a stored 0 would make the projection
+  // infinite, and a stored 255 would turn the camera inside out.
+  setFovDeg(0);
+  TEST_ASSERT_EQUAL_UINT8(60, fovDeg());
+  setFovDeg(255);
+  TEST_ASSERT_EQUAL_UINT8(90, fovDeg());
+  setFovDeg(75);
+}
+
+// A camera copies its plane out of the current FOV, so a change only reaches
+// the screen after setAngle. This pins that the pair really move together, and
+// that the crosshair stays on the centre row at every width.
+static void test_camera_plane_follows_the_current_fov(void) {
+  setFovDeg(60);
+  Camera c;
+  c.px = 8.5f; c.py = 8.5f; c.z = 3.2f;
+  setAngle(c, 0.7f);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, planeLen(), sqrtf(c.planeX * c.planeX + c.planeY * c.planeY));
+  setPitch(c, HORIZON);
+  TEST_ASSERT_EQUAL_INT(VIEW_H / 2, crosshairRow());
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, (float)crosshairRow(), (float)c.horizon + c.aimSlope * proj());
+  setFovDeg(90);
+  setAngle(c, 0.7f);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1.0f, sqrtf(c.planeX * c.planeX + c.planeY * c.planeY));
+  setFovDeg(75);
+  setAngle(c, 0.7f);
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, planeLen(), sqrtf(c.planeX * c.planeX + c.planeY * c.planeY));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crosshair_is_panel_centre);
@@ -1173,6 +1217,8 @@ int main(int, char**) {
   RUN_TEST(test_pick_reports_a_side_when_facing_a_wall);
   RUN_TEST(test_every_row_is_painted_or_open_exactly_once);
   RUN_TEST(test_open_list_stays_sorted_and_disjoint);
+  RUN_TEST(test_setFovDeg_updates_plane_and_proj_together);
+  RUN_TEST(test_camera_plane_follows_the_current_fov);
   RUN_TEST(test_slab_shows_an_underside);
   RUN_TEST(test_slab_band_covers_the_slab_spans);
   RUN_TEST(test_slab_band_is_well_formed_and_monotonic);

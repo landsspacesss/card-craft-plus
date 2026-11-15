@@ -30,14 +30,36 @@ namespace raycast {
 constexpr int VIEW_W = 240;
 constexpr int VIEW_H = 135;
 
-// Half-width of the camera plane: tan(halfFov), so 0.75 is a ~73 degree
+// Half-width of the camera plane: tan(halfFov), so 0.75 is a ~74 degree
 // horizontal field of view — wide, because on a 240x135 panel peripheral
 // vision is the only warning you get that something is coming for you.
-constexpr float PLANE_LEN = 0.75f;
+//
+// It is a value now rather than a constant: the field of view is a setting, and
+// these two are its cached form. planeLen() is what a ray needs and proj() is
+// what a projection needs, and they are only ever written by setFovDeg(), the
+// same way a Camera's horizon and aimSlope are only ever written by setPitch().
+constexpr float PLANE_LEN_DEFAULT = 0.75f;
 
 // Pixels per world unit at distance 1. Matches the horizontal scale
-// (VIEW_W/2 / PLANE_LEN = 160) so a cube is square on screen.
-constexpr float PROJ = 160.0f;
+// (VIEW_W/2 / PLANE_LEN_DEFAULT = 160) so a cube is square on screen.
+constexpr float PROJ_DEFAULT = 160.0f;
+static_assert(PROJ_DEFAULT == (float)(VIEW_W / 2) / PLANE_LEN_DEFAULT,
+              "the projection is the horizontal scale, never its own number");
+
+// The widest the setting goes, and the projection that comes with it — the
+// smallest one, which is the worst case for every fixed-point step in the
+// walker.
+constexpr float   PLANE_LEN_MAX = 1.0f;   // tan(45), i.e. a 90 degree FOV
+constexpr float   PROJ_MIN      = (float)(VIEW_W / 2) / PLANE_LEN_MAX;
+constexpr uint8_t FOV_MIN_DEG   = 60;
+constexpr uint8_t FOV_MAX_DEG   = 90;
+
+// The field of view in force. setFovDeg clamps to [FOV_MIN_DEG, FOV_MAX_DEG]
+// and updates both halves; nothing else writes them.
+float   planeLen();
+float   proj();
+uint8_t fovDeg();
+void    setFovDeg(uint8_t deg);
 
 // The camera's resting downward tilt, as the horizon's offset from the middle
 // of the panel, in pixels. A board with only four buttons never leaves this
@@ -75,10 +97,8 @@ constexpr float EYE = 1.2f;
 // dead centre. The slope is derived from the horizon rather than fixed: shear
 // the horizon and the ray through the panel's centre tilts with it, keeping
 // reticle and aim in agreement.
-constexpr float AIM_SLOPE = (float)TILT / PROJ;
-constexpr float slopeFor(int horizon) {
-  return (float)(VIEW_H / 2 - horizon) / PROJ;
-}
+constexpr float AIM_SLOPE = (float)TILT / PROJ_DEFAULT;
+float slopeFor(int horizon);
 
 // One cell past where the fog shuts, which render::BANDS and BAND_CELLS decide
 // between them: the ramp saturates two bands early, so at ten bands of two
@@ -189,7 +209,13 @@ void setPitch(Camera& cam, int horizon);
 // Screen row the aim ray projects to. Constant at any pitch: the aim slope is
 // defined as whatever puts the ray through the middle of the panel, so the
 // reticle never moves and the world moves under it.
-constexpr int crosshairRow() { return HORIZON + (int)(AIM_SLOPE * PROJ); }
+//
+// HORIZON + TILT is the middle row, and it stays the middle row at any field of
+// view: a wider FOV moves the aim slope rather than the row it lands on, and
+// the projection that multiplies it moves the other way. Written as the row
+// itself so that stays true by construction.
+constexpr int crosshairRow() { return VIEW_H / 2; }
+static_assert(HORIZON + TILT == VIEW_H / 2, "the resting tilt is measured from the centre");
 
 void setAngle(Camera& cam, float angle);
 void init();

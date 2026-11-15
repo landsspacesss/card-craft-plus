@@ -589,6 +589,9 @@ static void __attribute__((noinline))
 drawFloorSpan(uint16_t* p, const raycast::Span& s,
               const uint16_t (*tbl)[TEXELS], int band, int frac, int thX,
               int horizon, const raycast::Camera& cam, float rdx, float rdy) {
+  // The field of view cannot change inside a frame, and this is the innermost
+  // pixel loop in the renderer: read it once, into a register.
+  const float projPx = raycast::proj();
         // A floor, textured. Every pixel needs where on the surface it is
         // looking, which is a function of the distance to that row — and that
         // distance is dz * PROJ / (row - horizon), a divide the table above has
@@ -606,8 +609,8 @@ drawFloorSpan(uint16_t* p, const raycast::Span& s,
         const bool ceiling = (s.face == raycast::F_BOT);
 
         const float dz = cam.z - (float)s.zTop;
-        const float kx = rdx * dz * raycast::PROJ * (float)textures::TEX_N;
-        const float ky = rdy * dz * raycast::PROJ * (float)textures::TEX_N;
+        const float kx = rdx * dz * projPx * (float)textures::TEX_N;
+        const float ky = rdy * dz * projPx * (float)textures::TEX_N;
         const float bx = cam.px * (float)textures::TEX_N;
         const float by = cam.py * (float)textures::TEX_N;
         const uint8_t* tex = s_topFor[s.mat];
@@ -1294,11 +1297,12 @@ void drawMobs(const game::State& s, const raycast::Camera& cam) {
 
   uint16_t* base = raw();
   static int16_t srcX[W];        // destination column -> source column
+  const float projPx = raycast::proj();
 
   for (int i = 0; i < n; ++i) {
     const Draw& d = list[i];
     const sprites::MobArt& art = sprites::kMobArt[d.kind];
-    const float invD = (float)raycast::PROJ / d.depth;
+    const float invD = projPx / d.depth;
 
     int band = (int)d.depth >> BAND_SHIFT;
     if (band >= BANDS) band = BANDS - 1;
@@ -1554,6 +1558,7 @@ void drawParticles(const raycast::Camera& cam) {
   if (fabsf(det) < 1e-6f) return;
   const float invDet = 1.0f / det;
   uint16_t* base = raw();
+  const float projPx = raycast::proj();
 
   for (int i = 0; i < MAX_PARTICLES; ++i) {
     const Particle& p = s_part[i];
@@ -1563,7 +1568,7 @@ void drawParticles(const raycast::Camera& cam) {
     const float tx = invDet * (cam.dy * spx - cam.dx * spy);
     const float ty = invDet * (-cam.planeY * spx + cam.planeX * spy);
     if (ty < 0.20f) continue;
-    const float invD = (float)raycast::PROJ / ty;
+    const float invD = projPx / ty;
 
     const int cx = (int)((float)W * 0.5f * (1.0f + tx / ty));
     const int cy = (int)((float)cam.horizon + (cam.z - p.z) * invD);
@@ -1636,6 +1641,7 @@ void drawDrops(const game::State& s, const raycast::Camera& cam) {
   if (fabsf(det) < 1e-6f) return;
   const float invDet = 1.0f / det;
   uint16_t* base = raw();
+  const float projPx = raycast::proj();
 
   for (int i = 0; i < game::MAX_DROPS; ++i) {
     const game::Drop& d = s.drops[i];
@@ -1651,7 +1657,7 @@ void drawDrops(const game::State& s, const raycast::Camera& cam) {
     const float tx = invDet * (cam.dy * spx - cam.dx * spy);
     const float ty = invDet * (-cam.planeY * spx + cam.planeX * spy);
     if (ty < 0.20f) continue;
-    const float invD = (float)raycast::PROJ / ty;
+    const float invD = projPx / ty;
 
     const int cx = (int)((float)W * 0.5f * (1.0f + tx / ty));
     const int cy = (int)((float)cam.horizon

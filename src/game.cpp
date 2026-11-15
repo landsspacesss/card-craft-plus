@@ -187,12 +187,15 @@ constexpr float    ALERT_ARRIVE = 1.6f;
 constexpr float    ALERT_SPEED  = 0.85f;   // heading somewhere, not chasing
 
 // ---- being forgiving ---------------------------------------------------------
-// The camera plane is PLANE_LEN half-widths across at unit distance, so the
-// edge of the panel sits at atan(0.75) = 36.9 degrees off the look direction
-// and its cosine is 1/sqrt(1 + PLANE_LEN^2) = 0.800 exactly. This is
-// deliberately a little wider than that: a mob half off the edge of the screen
-// has still been seen, and a boundary drawn exactly at the panel edge would
-// flicker every time one straddled it.
+// The camera plane is planeLen() half-widths across at unit distance, so at the
+// default field of view the edge of the panel sits at atan(0.75) = 36.9 degrees
+// off the look direction and its cosine is 1/sqrt(1 + planeLen^2) = 0.800. A
+// wider field of view pushes the edge further out; SEEN_COS does not follow it,
+// and should not -- this is a tolerance for what counts as noticed, not a
+// measurement of the panel. Either way it is deliberately a little wider than
+// the default: a mob half off the edge of the screen has still been seen, and a
+// boundary drawn exactly at the panel edge would flicker every time one
+// straddled it.
 constexpr float    SEEN_COS   = 0.72f;    // ~44 degrees
 constexpr float    SEEN_DIST  = 12.0f;    // past the fog it is a shape, not a mob
 // What "forgiving" is worth, numerically. A blow from behind winds up almost
