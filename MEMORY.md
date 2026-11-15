@@ -113,3 +113,43 @@ Two rules fall out of this:
    RAM for more blocks; the blocker is the 4-bit field. Repacking `g_cell` (move
    the light nibble, widen the material field) is the prerequisite, and it
    touches the save format as well.
+
+## The radio, measured: what a network needs
+
+`pio run -e adv-net` (`-DCC_NET_PROBE`) brings up `WiFi.mode(WIFI_STA)` at the top
+of `setup()` with the DMA framebuffers skipped, and prints the heap either side
+of it with `ESP_LOGE` (the Arduino core compiles `ESP_LOGI` out; errors survive).
+
+| | heap free | largest block |
+|---|---:|---:|
+| before the radio is started | 165,304 | 131,060 |
+| after `WiFi.mode(WIFI_STA)` | 118,164 | 106,484 |
+| **the radio itself** | **−47,140** | |
+
+Add it up against the game as it ships:
+
+```
+heap available (no framebuffers)          165,304
+two 16bpp framebuffers                   -129,600
+the radio                                 -47,140
+                                          ---------
+                                          -11,436   -> does not fit, before the game's own needs
+```
+
+That is why `esp_wifi_init` fails today with `ESP_ERR_NO_MEM` (0x101): the two
+64.8 KB DMA blocks leave 50,760 B, and the radio wants 47,140 of it plus
+contiguous room. **The blocker is the framebuffer, not the world** — slimming the
+world by 15 KB does not change the arithmetic enough to matter.
+
+What does fit:
+
+| framebuffer plan | framebuffer cost | + radio | left for the game |
+|---|---:|---:|---:|
+| two 16bpp (today) | 129,600 | 176,740 | **−11,436** |
+| **one 16bpp** (no double buffering) | 64,800 | 111,940 | **+53,364** |
+| 8bpp back + 16bpp front | 97,200 | 144,340 | +20,964 |
+| two 8bpp + line staging | ~72,500 | 119,640 | +45,664 |
+
+So a networked build needs the single-buffer change (cheapest, but the frame is
+drawn and sent serially: ~13 ms of SPI no longer overlaps the next frame's work)
+or an 8bpp front/back split (keeps pipelining, costs a palette).

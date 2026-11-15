@@ -717,12 +717,12 @@ void setup() {
     // What does bringing the radio up actually cost? Measured, because the
     // answer decides whether the game can carry a network at all: the heap
     // figure is the one that gates it, and it cannot be read off a size report.
-    ESP_LOGI("netprobe", "before_wifi heap=%u largest=%u",
+    ESP_LOGE("netprobe", "before_wifi heap=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     WiFi.mode(WIFI_STA);
     delay(1500);
-    ESP_LOGI("netprobe", "after_wifi heap=%u largest=%u low=%u",
+    ESP_LOGE("netprobe", "after_wifi heap=%u largest=%u low=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
@@ -732,7 +732,14 @@ void setup() {
   // Before anything else: two contiguous 64.8 KB DMA blocks are the tightest
   // allocation in the program, and the display and keyboard libraries have not
   // had a chance to fragment the heap yet.
+#ifdef CC_NET_PROBE
+  // The probe measures what the radio wants with the framebuffers OUT of the
+  // picture, which is the only way to tell "WiFi needs more than we have" from
+  // "WiFi cannot fit alongside the two 64.8 KB DMA blocks".
+  const bool got = true;
+#else
   const bool got = render::reserve();
+#endif
 
   hal::begin();
   render::attach(hal::display());
