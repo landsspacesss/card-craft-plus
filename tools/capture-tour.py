@@ -57,6 +57,24 @@ def _request(api, method, path, body=None, content_type="application/json"):
     return json.loads(raw) if raw else {}
 
 
+def _nvs_saved(state_dir, sid):
+    """True when the tour's last shot has written its two keys.
+
+    Read straight out of the emulated flash rather than off the screen: the NVS
+    partition is at 0x9000, key names are stored as bytes, and "fov" is a
+    substring no other page holds. This is what makes the last shot provable
+    instead of assumed -- QEMU's keyboard drops presses, so the sequence can end
+    one short and the save simply never happens."""
+    path = Path(state_dir) / "sessions" / sid / "virtual-flash.bin"
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0x9000)
+            nvs = fh.read(0x5000)
+    except FileNotFoundError:
+        return False
+    return b"fov" in nvs and b"br" in nvs
+
+
 def _get_frame(api, sid):
     try:
         return _request(api, "GET", f"/sessions/{sid}/frame.png")
@@ -92,10 +110,12 @@ def _press_enter(api, sid):
     for key in ENTER_KEYS:
         try:
             # hold_seconds is not decoration: without it the service takes a
-            # different branch that queues nothing the guest ever sees.
+            # different branch that queues nothing the guest ever sees, and a
+            # short hold can fall entirely between two keyboard polls once the
+            # world is being drawn. The service rejects anything over 5 s.
             _request(api, "POST", f"/sessions/{sid}/input",
                      {"kind": "key", "key": key, "action": "tap",
-                      "hold_seconds": 0.2})
+                      "hold_seconds": 4.5})
             return
         except SystemExit as exc:
             last_error = exc
@@ -107,6 +127,9 @@ def main():
     ap.add_argument("--api", default="http://127.0.0.1:8798")
     ap.add_argument("--bin", required=True, help="merged image to run")
     ap.add_argument("--out", default="docs/emu")
+    ap.add_argument("--state-dir", default="/home/landspace/espemu-state-cardcraft",
+                    help="the service's state dir; the flash image under it is the "
+                         "ground truth for whether the last shot's save happened")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -139,10 +162,17 @@ def main():
                 frame = last
             else:
                 _press_enter(args.api, sid)
-                frame = _wait_for_change(args.api, sid, last, timeout=90)
-            # One more frame, so the photograph is of a settled state rather than
-            # of the frame the change happened on.
-            time.sleep(1.0)
+                frame = _wait_for_change(args.api, sid, last, timeout=45)
+            if name.startswith("gyro-"):
+                # A gyro shot is a rate, not a pose: photographing the first
+                # frame after the change would show the view a few degrees from
+                # where it started. Four seconds of 40 deg/s is most of a turn,
+                # and four seconds of pitch is into the clamp.
+                time.sleep(4.0)
+            else:
+                # One more frame, so the photograph is of a settled state rather
+                # than of the frame the change happened on.
+                time.sleep(1.0)
             frame = _get_frame(args.api, sid) or frame
             path = out / f"{name}.png"
             path.write_bytes(frame)
@@ -151,13 +181,45 @@ def main():
             print(f"  {name}: {len(frame)} bytes", flush=True)
 
             if name == "gyro-pitch":
+                # The last shot is the one that saves 100% / 90 degrees. Make
+                # sure it was actually reached -- a dropped ENTER leaves the tour
+                # a shot short, and then there is nothing in flash to come back
+                # to -- and photograph it again once it has.
+                for attempt in range(6):
+                    if _nvs_saved(args.state_dir, sid):
+                        break
+                    print(f"  (shot 7 not reached yet, pressing again: {attempt + 1})",
+                          flush=True)
+                    _press_enter(args.api, sid)
+                    time.sleep(4.0)
+                if not _nvs_saved(args.state_dir, sid):
+                    raise SystemExit("the tour never saved; refusing to photograph a "
+                                     "persistence claim that flash does not support")
+                time.sleep(4.0)      # pitch, into the clamp
+                frame = _get_frame(args.api, sid) or frame
+                captured[name].write_bytes(frame)
+                print(f"  {name}: re-photographed in its saved state", flush=True)
+
                 # Persistence, and not circular: this shot is the one that saves
                 # 100% / 90 degrees to NVS. A reset then boots the tour again,
                 # shot 0 reads NVS, and the card has to show the saved values.
                 _request(args.api, "POST", f"/sessions/{sid}/reset", {})
-                time.sleep(2.0)
-                _wait_for_drawing(args.api, sid, timeout=180)
-                frame = _wait_for_change(args.api, sid, b"", timeout=180)
+                # The panel keeps the last frame it was given, so right after a
+                # reset the endpoint still serves shot 7: wait for the guest to
+                # draw something different, then for it to hold still, which is
+                # what the settings card does and the world behind it does not.
+                _wait_for_change(args.api, sid, last, timeout=240)
+                frame = last
+                stable = 0
+                deadline = time.time() + 240
+                while stable < 3 and time.time() < deadline:
+                    time.sleep(1.5)
+                    fresh = _get_frame(args.api, sid)
+                    if fresh and fresh == frame:
+                        stable += 1
+                    else:
+                        stable = 0
+                        frame = fresh or frame
                 path = out / "nvs-after-reset.png"
                 path.write_bytes(frame)
                 captured["nvs-after-reset"] = path

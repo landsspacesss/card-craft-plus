@@ -518,10 +518,20 @@ void tourEnter(int n) {
 // therefore photographs whichever shot the guest last managed to finish. ENTER
 // is the one key this emulator does deliver, and it makes the sequence
 // hand-cranked: one press, one shot, and the harness photographs after each.
+constexpr uint32_t TOUR_FALLBACK_MS = 25000;
+
 void tourTick(bool advance) {
   static int shot = -1;
+  static uint32_t shotStart = 0;
+  const uint32_t now = millis();
+  // ENTER is the only key this emulator delivers, and it is delivered as a tap:
+  // at QEMU's frame rate a short tap can fall entirely between two keyboard
+  // polls and never become an edge. So a shot also expires on its own, which
+  // makes the sequence advance whether or not the press landed.
+  const bool due = shot >= 0 && (now - shotStart) >= TOUR_FALLBACK_MS;
   if (shot >= TOUR_SHOTS - 1) return;      // hold the last one; the session is the harness's
-  if (shot < 0 || advance) {
+  if (shot < 0 || advance || due) {
+    shotStart = now;
     ++shot;
     Serial.printf("TOUR %d %s\n", shot, kTourName[shot]);
     tourEnter(shot);

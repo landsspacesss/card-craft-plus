@@ -1183,6 +1183,40 @@ static void test_camera_plane_follows_the_current_fov(void) {
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, planeLen(), sqrtf(c.planeX * c.planeX + c.planeY * c.planeY));
 }
 
+// The field of view changes the projection, and the walker's per-cell step is
+// derived from it -- so every column has to be cast at each end of the range,
+// not just the middle. This is the width the settings card can put the game in,
+// and the only place it is ever exercised.
+static void test_every_column_is_walked_at_both_fov_extremes(void) {
+  const uint8_t kFov[] = { 60, 75, 90 };
+  Span spans[MAX_SPANS];
+  for (uint8_t fov : kFov) {
+    setFovDeg(fov);
+    for (int a = 0; a < 6; ++a) {
+      Camera c = atSpawn((float)a * 0.5236f);
+      setPitch(c, HORIZON + ((a % 3) - 1) * 40);
+      int painted = 0;
+      for (int x = 0; x < VIEW_W; ++x) {
+        ColumnResult res;
+        const int n = castColumn(c, x, -1, -1, -1, spans, res);
+        TEST_ASSERT_TRUE(n >= 0);
+        TEST_ASSERT_TRUE(n <= MAX_SPANS);
+        TEST_ASSERT_TRUE(res.nOpen >= 0);
+        TEST_ASSERT_TRUE(res.nOpen <= MAX_OPEN);
+        for (int i = 0; i < n; ++i) {
+          TEST_ASSERT_TRUE(spans[i].y0 >= 0 && spans[i].y1 <= VIEW_H);
+          TEST_ASSERT_TRUE(spans[i].y0 < spans[i].y1);
+        }
+        for (int i = 0; i < res.nOpen; ++i)
+          TEST_ASSERT_TRUE(res.open[i].y0 < res.open[i].y1);
+        painted += n;
+      }
+      TEST_ASSERT_TRUE(painted > 0);
+    }
+  }
+  setFovDeg(75);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_crosshair_is_panel_centre);
@@ -1219,6 +1253,7 @@ int main(int, char**) {
   RUN_TEST(test_open_list_stays_sorted_and_disjoint);
   RUN_TEST(test_setFovDeg_updates_plane_and_proj_together);
   RUN_TEST(test_camera_plane_follows_the_current_fov);
+  RUN_TEST(test_every_column_is_walked_at_both_fov_extremes);
   RUN_TEST(test_slab_shows_an_underside);
   RUN_TEST(test_slab_band_covers_the_slab_spans);
   RUN_TEST(test_slab_band_is_well_formed_and_monotonic);
