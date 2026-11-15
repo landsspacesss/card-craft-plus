@@ -153,13 +153,15 @@ takes a branch that queues nothing the guest ever sees).
 
 | File | Shows |
 |---|---|
-| `settings.png` | the card at the shipped defaults (five rows; four fit, so CALIBRATE is behind the chevron) |
+| `settings.png` | the card at the shipped defaults (seven rows; four fit, so the rest are behind the chevron) |
+| `gyro-raw.png` | the `GYRO` row's live sample: `GX -12.3 GY +45.6 GZ +3.4`, faked, with the card at 100% / 90° |
+| `gyro-map.png` | ...and scrolled to the mapping rows: `GYRO TURN: Y-`, `GYRO TILT: X+` |
 | `bright-10.png`, `bright-100.png` | the two ends of the backlight, **as the card reports them** — the emulator's frame is the framebuffer and a backlight is a register, so the pixels themselves cannot dim |
 | `fov-60.png`, `fov-90.png` | the two ends of the field of view: the label and the world behind the card, which is drawn from the same camera |
 | `play-rest.png` | the reference view, gyro off |
 | `gyro-yaw.png` | the same place after a faked 40 °/s yaw: the view has turned, and nothing else on the panel changed |
 | `gyro-pitch.png` | ...and after a faked 25 °/s pitch: looking up, clamped by the same rows the keys use |
-| `nvs-after-reset.png` | the card after the session was reset — **100% / 90° read back out of NVS** |
+| `nvs-after-reset.png` | the card after the session was reset — **100% / 90° read back out of NVS** (the write happens in the `gyro-raw` shot, with the card up, because that is where this emulator delivers a keypress) |
 
 The persistence shot is deliberately not circular: the tour's last shot is the
 only one that calls `saveSettings()`, so the picture after the reset is either

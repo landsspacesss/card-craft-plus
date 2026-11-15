@@ -472,8 +472,9 @@ const char* settingsFoot() {
 // BMI270, so without an injected rate they would both be the resting view.
 
 static const char* const kTourName[] = { "settings",    "bright-10", "bright-100",
-                                         "fov-60",      "fov-90",    "play-rest",
-                                         "gyro-yaw",    "gyro-pitch", "gyro-raw" };
+                                         "fov-60",      "fov-90",    "gyro-raw",
+                                         "gyro-map",    "play-rest", "gyro-yaw",
+                                         "gyro-pitch" };
 constexpr int TOUR_SHOTS = (int)(sizeof(kTourName) / sizeof(kTourName[0]));
 
 void startRun();   // defined below, beside the other screen transitions
@@ -506,7 +507,27 @@ void tourEnter(int n) {
     case 2: s_cfg.brightnessPct = settings::kBrightnessMax; tourApply(); break;
     case 3: s_cfg.fovDeg = settings::kFovMin;               tourApply(); break;
     case 4: s_cfg.fovDeg = settings::kFovMax;               tourApply(); break;
-    case 5:   // the same view without the gyro, as the reference for the two below
+    case 5:   // the card with a live sample on its GYRO row
+      // The one flash write of the whole tour, and it is here rather than in a
+      // play-mode shot on purpose: this emulator delivers ENTER reliably while
+      // the card is up and not while the world is being drawn, so the write
+      // that the persistence claim depends on must not need a press there.
+      s_cfg.brightnessPct = settings::kBrightnessMax;
+      s_cfg.fovDeg = settings::kFovMax;
+      saveSettings();
+      s_cfg.gyroOn = true;
+      motion::fakeSet(-12.3f, 45.6f, 3.4f);
+      applySettings(true);
+      openSettings();
+      s_scr = SCR_SETTINGS;
+      s_lockout = 0;
+      break;
+    case 6:   // ...the same card scrolled down to the two mapping rows
+      // The cursor is what brings a row into the window: the card shows four at
+      // a time, and the mapping rows sit below the fold.
+      s_setMenu.move(4);
+      break;
+    case 7:   // the same view without the gyro, as the reference for the two below
       motion::fakeSet(0.0f, 0.0f, 0.0f);
       s_cfg.gyroOn = false;
       s_game.angle = 0.0f;
@@ -515,36 +536,20 @@ void tourEnter(int n) {
       s_scr = SCR_PLAY;
       s_lockout = 0;
       break;
-    case 6:   // ...and turning on the spot, at about the speed a hand would
+    case 8:   // ...and turning on the spot, at about the speed a hand would
       motion::fakeSet(0.0f, 40.0f, 0.0f);   // turn is on Y now
       s_cfg.gyroOn = true;
       applySettings(true);
       s_scr = SCR_PLAY;
       s_lockout = 0;
       break;
-    case 7:   // ...and tilting the far edge down to look up
-      // The one flash write of the whole tour, at the end. A commit under QEMU
-      // costs ten or twenty seconds, so it must not sit in the middle of the
-      // shot schedule; and it has to happen BEFORE the reset for the picture
-      // after it to be evidence. Shot 0 is what reads it back.
-      s_cfg.brightnessPct = settings::kBrightnessMax;
-      s_cfg.fovDeg = settings::kFovMax;
-      saveSettings();
+    default:  // ...and tilting the far edge down to look up
       motion::fakeSet(25.0f, 0.0f, 0.0f);
       s_cfg.gyroOn = true;
       applySettings(true);
       s_scr = SCR_PLAY;
       s_lockout = 0;
       break;
-    default: {  // the card with a live sample on its GYRO row
-      s_cfg.gyroOn = true;
-      motion::fakeSet(-12.3f, 45.6f, 3.4f);
-      applySettings(true);
-      openSettings();
-      s_scr = SCR_SETTINGS;
-      s_lockout = 0;
-      break;
-    }
   }
 }
 
