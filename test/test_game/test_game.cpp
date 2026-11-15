@@ -2855,6 +2855,54 @@ static void test_a_full_scale_flick_stays_finite_and_normalised(void) {
   TEST_ASSERT_TRUE(s.pitch >= (float)(raycast::HORIZON - raycast::PITCH_DOWN) - 0.01f);
 }
 
+// ---- respawn ----------------------------------------------------------------
+
+// Dying used to mean a new world. Respawning puts the same run back on its feet
+// -- the build, the inventory and the night are the things a death should not
+// cost -- so what has to be true afterwards is checked here.
+void test_respawn_revives_in_place_with_a_full_heart_bar(void) {
+  State s = fresh();
+  s.dead = true;
+  s.hp = 0;
+  s.hurtFlash = 30;
+  s.airborne = true;
+  s.jumpVel = 3.0f;
+  const float px = s.cam.px, py = s.cam.py;
+
+  respawn(s);
+
+  TEST_ASSERT_FALSE(s.dead);
+  TEST_ASSERT_EQUAL_INT16(s.maxHp, s.hp);
+  TEST_ASSERT_EQUAL_UINT16(0, s.hurtFlash);
+  TEST_ASSERT_FALSE(s.airborne);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, s.jumpVel);
+  TEST_ASSERT_TRUE(s.iframes > 0);            // a moment to react
+  // Same place: the world is the thing being kept.
+  TEST_ASSERT_EQUAL_FLOAT(px, s.cam.px);
+  TEST_ASSERT_EQUAL_FLOAT(py, s.cam.py);
+  // ...but standing on the ground, with the eye at its usual height above it.
+  const float ground = (float)world::groundAt(s.cam.px, s.cam.py);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, ground + raycast::EYE, s.cam.z);
+}
+
+// Respawning inside the three mobs that just killed you is not a second chance.
+void test_respawn_clears_the_room_but_not_the_map(void) {
+  State s = fresh();
+  s.dead = true;
+  s.hp = 0;
+  s.mobs[0].alive = true;
+  s.mobs[0].x = s.cam.px + 1.0f;
+  s.mobs[0].y = s.cam.py;
+  s.mobs[1].alive = true;
+  s.mobs[1].x = 2.5f;
+  s.mobs[1].y = 2.5f;
+
+  respawn(s);
+
+  TEST_ASSERT_FALSE(s.mobs[0].alive);         // on top of the player: gone
+  TEST_ASSERT_TRUE(s.mobs[1].alive);          // elsewhere on the map: kept
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_day_turns_to_night_on_schedule);
@@ -2971,6 +3019,8 @@ int main(int, char**) {
   RUN_TEST(test_the_spark_ring_never_overflows);
   RUN_TEST(test_effects_do_not_disturb_the_simulation);
   RUN_TEST(test_degenerate_input);
+  RUN_TEST(test_respawn_revives_in_place_with_a_full_heart_bar);
+  RUN_TEST(test_respawn_clears_the_room_but_not_the_map);
   RUN_TEST(test_gyro_yaw_turns_the_camera_at_the_given_rate);
   RUN_TEST(test_gyro_pitch_is_clamped_at_the_same_limit_the_keys_are);
   RUN_TEST(test_zero_gyro_rates_leave_the_view_exactly_where_it_was);

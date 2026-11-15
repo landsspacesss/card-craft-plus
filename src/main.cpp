@@ -100,6 +100,10 @@ uint8_t          s_calib = 0;
 int              s_calibFrames = 0;
 
 uint32_t         s_tickAccum = 0;
+// When the next autosave is due, in millis(). Zero means "not scheduled yet",
+// so the first minute of a run is not saved on its very first frame.
+uint32_t         s_autoSaveAt = 0;
+constexpr uint32_t AUTO_SAVE_MS = 60000u;
 uint32_t         s_lastUs = 0;
 int              s_lockout = 0;
 uint16_t         s_mineChirp = 0;
@@ -600,7 +604,10 @@ void openSlotMenu(bool saving) {
   save::reset();
   const bool card = save::begin();
   for (int i = 0; i < save::SLOT_N; ++i) {
-    snprintf(s_slotLabel[i], sizeof s_slotLabel[i], "SLOT %d", i + 1);
+    if (i == save::SLOT_AUTO)
+      snprintf(s_slotLabel[i], sizeof s_slotLabel[i], "AUTO");
+    else
+      snprintf(s_slotLabel[i], sizeof s_slotLabel[i], "SLOT %d", i + 1);
 
     save::Meta m;
     const bool used = card && save::readMeta(i, m) && m.used;
@@ -618,13 +625,18 @@ void openSlotMenu(bool saving) {
     // selectable when saving, where it means "this one". The window still shows
     // it either way, because a row that vanished would move the others under
     // the player's finger.
-    s_slotItems[i] = ui::MenuItem{ s_slotLabel[i], s_slotDetail[i], used || saving };
+    // The autosave is readable and never a manual target: the game owns that
+    // row, and a player who saved into it by hand would lose it to the next
+    // automatic write without being told.
+    const bool eligible = (i == save::SLOT_AUTO) ? (!saving && used) : (used || saving);
+    s_slotItems[i] = ui::MenuItem{ s_slotLabel[i], s_slotDetail[i], eligible };
   }
 
   s_slotMenu.open(saving ? "SAVE TO" : "LOAD FROM", s_slotItems, save::SLOT_N);
 }
 
 void startRun() {
+  s_autoSaveAt = 0;
   // esp_random() is seeded from hardware noise, so two runs from a cold boot
   // do not produce the same island.
   game::begin(s_game, esp_random() ^ micros());
@@ -648,6 +660,10 @@ void resume() {
 }
 
 void endRun() {
+  // Autosave on the way out. A death is exactly when the world is most worth
+  // keeping: the build is finished, the night won or lost, and the player is
+  // about to be given a choice about whether to continue.
+  if (save::ready()) save::write(save::SLOT_AUTO, s_game);
   const uint32_t sc = game::score(s_game);
   if (sc > s_best) {
     s_best = sc;
@@ -1104,6 +1120,20 @@ void loop() {
       ui::crosshair(s_game);
       ui::hud(s_game);
 
+      // Autosave, once a minute of play. Not every frame and not every tick:
+      // the blob is 70 KB and the card write is the one thing in the frame
+      // that can take a tenth of a second, so it is paced by wall time and
+      // only while a run is actually going.
+      if (!s_game.dead) {
+        const uint32_t now = millis();
+        if (s_autoSaveAt == 0) {
+          s_autoSaveAt = now + AUTO_SAVE_MS;
+        } else if ((int32_t)(now - s_autoSaveAt) >= 0) {
+          s_autoSaveAt = now + AUTO_SAVE_MS;
+          if (save::ready()) save::write(save::SLOT_AUTO, s_game);
+        }
+      }
+
       if (s_game.dead) endRun();
       break;
     }
@@ -1409,7 +1439,21 @@ void loop() {
     case SCR_DEAD:
       drawScene();
       ui::deathCard(s_game, s_best, s_record);
-      if (confirm) startRun();
+      // Two ways out. Respawning keeps the world -- that is the point of the
+      // card saying RESPAWN rather than NEW WORLD, and it is what the autosave
+      // beside it is for.
+      if (confirm) {
+        game::respawn(s_game);
+        s_record = false;
+        s_scr = SCR_PLAY;
+        s_lockout = LOCKOUT_FRAMES;
+        s_tickAccum = 0;
+        s_lastUs = micros();
+      } else if (cancel) {
+        ui::rerollSplash(micros());
+        s_scr = SCR_TITLE;
+        s_lockout = LOCKOUT_FRAMES;
+      }
       break;
   }
 

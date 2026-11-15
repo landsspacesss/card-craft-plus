@@ -1951,6 +1951,38 @@ static uint32_t playerAct(State& s) {
 
 // ---- tick -------------------------------------------------------------------
 
+void respawn(State& s) {
+  s.dead = false;
+  s.hp = s.maxHp;
+  s.hurtFlash = 0;
+  s.iframes = 60;          // a second of grace, so the same creeper cannot finish it
+  s.noise = 0;
+  s.shake = 0;
+  s.airborne = false;
+  s.jumpVel = 0.0f;
+
+  // Somewhere legal to stand. The player usually died where they were standing,
+  // which is inside whatever killed them, so the column under the feet is
+  // re-checked and the body is lifted onto its surface if it is not solid.
+  s.feetZ = (uint8_t)world::groundAt(s.cam.px, s.cam.py);
+  s.cam.z = (float)world::groundAt(s.cam.px, s.cam.py) + raycast::EYE;
+  s.eyeZ = s.cam.z;
+
+  // Clear the room. Not the whole map: the wave is the pressure the player is
+  // supposed to manage, but respawning inside three of them is not a second
+  // chance, it is a death loop.
+  for (int i = 0; i < MAX_MOBS; ++i) {
+    Mob& m = s.mobs[i];
+    if (!m.alive) continue;
+    const float dx = m.x - s.cam.px, dy = m.y - s.cam.py;
+    if (dx * dx + dy * dy < 8.0f * 8.0f) {
+      m.alive = false;
+      m.hitFlash = 0;
+    }
+  }
+  s.spawnTimer = 0;
+}
+
 uint32_t tick(State& s, const Input& in) {
   if (s.dead) return 0;
 

@@ -600,6 +600,12 @@ void begin(State& s, uint32_t seed);
 // Advances one 1/TICK_HZ step. Returns an OR of Event bits.
 uint32_t tick(State& s, const Input& in);
 
+// Puts a dead run back on its feet in the SAME world: full health, the mobs
+// that were on top of you cleared out, and the player standing somewhere legal.
+// Inventory is kept -- losing the world's work is the thing a death should not
+// cost, and the score already records how far the night got.
+void respawn(State& s);
+
 // Moves the selection along the bar, wrapping. Skips nothing: an empty slot is
 // still selectable, because an empty hand is a thing you can choose to hold.
 

@@ -220,3 +220,23 @@ shipping configuration and is never flashed.
       allocated. It did, once, in the emulator, and then reported `NO_MEM` on
       every later attempt — so this is the riskiest line in the whole feature
       and the first thing to try on the board
+
+## The autosave, and dying
+
+There are now **four** slots. The first three are the player's; the fourth is
+`AUTO`, written by the game and never a manual target:
+
+- every **60 s** of play (not every frame: the blob is 70 KB and a card write is
+  the one thing in a frame that can take a tenth of a second)
+- when a run **ends** — a death is exactly when the world is worth keeping
+
+`AUTO` appears in the LOAD picker like any other row and is greyed out in the
+SAVE picker, because a manual save into it would be silently overwritten by the
+next automatic one.
+
+Death is no longer the end of the world. The death card offers **ENTER
+RESPAWN** or **ESC TITLE**: respawning keeps the world, the inventory and the
+night, refills the hearts, grants a second of invulnerability, lifts the player
+onto the surface of the column under them, and clears mobs within eight cells —
+respawning inside the three that just killed you is not a second chance. The
+score is still recorded, so a death costs the run's score, not its build.

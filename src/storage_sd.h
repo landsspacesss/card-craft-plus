@@ -28,7 +28,8 @@
 
 namespace save {
 
-constexpr int SLOT_N = 3;
+constexpr int SLOT_N = 4;   // 0..2 are the player's, 3 is the autosave
+constexpr int SLOT_AUTO = 3;
 
 // Everything that is in the header, and so everything a picker row can show
 // without opening the payload.

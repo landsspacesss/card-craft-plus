@@ -698,6 +698,11 @@ void deathCard(const game::State& s, uint32_t best, bool isRecord) {
   const hal::Caps& c = hal::caps();
   snprintf(buf, sizeof(buf), "%s AGAIN", c.kConfirm);
   render::textCentred(W / 2, H - 30, buf, C_GOOD, 1);
+
+  // Two ways out, spelled out: respawning is the new one, and quitting is still
+  // allowed. The world is kept either way -- an autosave is written when the run
+  // ends, so quitting costs the night, not the build.
+  render::textCentred(W / 2, H - 32, "ENTER RESPAWN   ESC TITLE", C_DIM, 1);
 }
 
 }  // namespace ui
