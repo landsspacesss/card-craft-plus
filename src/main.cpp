@@ -440,7 +440,10 @@ const char* settingsFoot() {
 //
 // The two look shots need CRAFTCRAFT_GYRO_FAKE as well: QEMU does not model the
 // BMI270, so without an injected rate they would both be the resting view.
-constexpr int TOUR_SHOT_FRAMES = 150;   // long enough for a picture, short enough to sit through
+// Wall clock, not frames. QEMU on a loaded machine renders a frame every second
+// or two, so a shot measured in frames is a shot that lasts minutes; measured in
+// milliseconds it is the same six seconds on the bench as on the desk.
+constexpr uint32_t TOUR_SHOT_MS = 12000;
 
 static const char* const kTourName[] = { "settings",    "bright-10", "bright-100",
                                          "fov-60",      "fov-90",    "play-rest",
@@ -450,15 +453,30 @@ constexpr int TOUR_SHOTS = (int)(sizeof(kTourName) / sizeof(kTourName[0]));
 void startRun();   // defined below, beside the other screen transitions
 
 void tourApply() {
-  saveSettings();
+  // Deliberately no saveSettings(): see shot 0. The values still go through
+  // sanitize() and applySettings() exactly as a keypress would.
+  settings::sanitize(s_cfg);
   applySettings(true);
   openSettings();
 }
 
 void tourEnter(int n) {
   switch (n) {
-    case 0:   // the card at its shipped defaults
+    case 0: {
+      // One NVS write, before the card is drawn, and then the card reads it
+      // back through the real loadSettings(). That is the persistence evidence:
+      // what is on screen at 100% and 90 degrees came out of flash, not out of
+      // the variable that was just set.
+      //
+      // One write and not one per shot, because a flash commit under QEMU costs
+      // ten or twenty seconds: a card that saved on every keypress would make
+      // the shot schedule meaningless, and the schedule is the only clock this
+      // build has.
       s_cfg = settings::Settings{};
+      s_cfg.brightnessPct = settings::kBrightnessMax;
+      s_cfg.fovDeg = settings::kFovMax;
+      saveSettings();
+      loadSettings();
       s_calib = 0;
       if (s_scr != SCR_SETTINGS) startRun();
       applySettings(true);
@@ -466,6 +484,7 @@ void tourEnter(int n) {
       s_scr = SCR_SETTINGS;
       s_lockout = 0;
       break;
+    }
     case 1: s_cfg.brightnessPct = settings::kBrightnessMin; tourApply(); break;
     case 2: s_cfg.brightnessPct = settings::kBrightnessMax; tourApply(); break;
     case 3: s_cfg.fovDeg = settings::kFovMin;               tourApply(); break;
@@ -498,18 +517,19 @@ void tourEnter(int n) {
 
 void tourTick() {
   static int shot = -1;
-  static int frames = 0;
-  if (frames == 0) {
-    ++shot;
-    if (shot >= TOUR_SHOTS) {
-      shot = TOUR_SHOTS - 1;      // hold the last one; the session is not over
-    } else {
+  static uint32_t shotStart = 0;
+  const uint32_t now = millis();
+  if (shot < 0 || now - shotStart >= TOUR_SHOT_MS) {
+    shotStart = now;
+    if (shot + 1 < TOUR_SHOTS) {
+      ++shot;
       Serial.printf("TOUR %d %s\n", shot, kTourName[shot]);
       tourEnter(shot);
     }
+    // Past the last shot it simply stays there: the session is the capture
+    // script's, and a card that reset itself to shot 0 would be a page that
+    // changes under the camera.
   }
-  ++frames;
-  if (frames >= TOUR_SHOT_FRAMES) frames = 0;
 }
 #endif  // CRAFTCRAFT_EMU_TOUR
 

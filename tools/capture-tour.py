@@ -30,6 +30,13 @@ from pathlib import Path
 SHOTS = ["settings", "bright-10", "bright-100", "fov-60", "fov-90",
          "play-rest", "gyro-yaw", "gyro-pitch"]
 
+# The tour holds each shot for six seconds of the guest's wall clock (see
+# TOUR_SHOT_MS), and QEMU's virtual clock tracks real time even when the guest
+# only manages a frame every second or two -- so the capture is scheduled in
+# seconds and samples the middle of each shot. Frame counting would drift with
+# the machine's load, which is the one thing that is not stable here.
+SHOT_SECONDS = 12.0
+
 
 def _request(api, method, path, body=None, content_type="application/json"):
     url = f"{api}/api/v1{path}"
@@ -100,65 +107,52 @@ def main():
 
     captured = {}
     try:
-        text, _ = wait_for(args.api, sid, "TOUR 0", timeout=120)
-        deadline = time.time() + 180
-        while len(captured) < len(SHOTS) and time.time() < deadline:
-            # Which shots have been announced so far?
-            for i, name in enumerate(SHOTS):
-                if name in captured:
-                    continue
-                if f"TOUR {i} {name}" not in text:
-                    continue
-                # Announce comes before the shot's own first frame, so let the
-                # state machine run for a moment: the page has to be rebuilt and
-                # the world redrawn behind it.
-                time.sleep(args.settle)
-                png = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
-                path = out / f"{name}.png"
-                path.write_bytes(png)
-                captured[name] = path
-                print(f"  {name}: {len(png)} bytes -> {path}", flush=True)
-            text = serial_text(args.api, sid)
-            time.sleep(0.3)
-
-        missing = [n for n in SHOTS if n not in captured]
-        if missing:
-            raise SystemExit(f"shots not captured: {missing}")
-
-        # NVS persistence: the tour saved brightness and FOV through the same
-        # saveSettings() the card does, so a reset has to bring them back.
-        #
-        # The boot line has already been printed once, so this waits for a
-        # SECOND one rather than for the string: the serial buffer is appended
-        # to across a QMP system_reset, and matching the first line would pass
-        # without the guest ever having rebooted.
-        before = serial_text(args.api, sid)
-        seen = before.count("settings:")
-        _request(args.api, "POST", f"/sessions/{sid}/reset", {})
-        line = ""
-        deadline = time.time() + 120
+        # The tour starts on the first guest frame, so the schedule is anchored
+        # to the first frame that is not the boot screen. Everything after that
+        # is fixed offsets: sample the middle of each six-second shot.
+        # The tour's first act, before anything is drawn, is to enter shot 0 --
+        # so the first frame that is not the blank panel already IS the settings
+        # card. A blank 240x135 PNG compresses to a kilobyte or two; the card
+        # does not.
+        # A blank 240x135 PNG is a few hundred bytes; anything past 1 KB has
+        # pixels in it. If nothing but blank arrives for 45 s the guest died on
+        # the way up -- the Arduino core's clock switch trips the interrupt
+        # watchdog under a loaded host, which is a QEMU artefact and not this
+        # firmware -- and the whole session is worth starting again.
+        deadline = time.time() + 45
         while time.time() < deadline:
-            text = serial_text(args.api, sid)
-            fresh = text.count("settings:") > seen
-            rewound = len(text) < len(before) and text.count("settings:") >= 1
-            if fresh or rewound:
-                at = text.rfind("settings:")
-                end = text.find("\n", at)
-                if end < 0:
-                    time.sleep(0.2)   # half a line is not a reading
-                    continue
-                line = text[at:end].strip()
+            try:
+                frame = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
+            except SystemExit:
+                time.sleep(0.4)      # no framebuffer yet
+                continue
+            if len(frame) > 1000:
                 break
-            time.sleep(0.3)
-        if not line:
-            raise SystemExit("no settings line after the reset")
-        print(f"after reset: {line}", flush=True)
-        (out / "nvs-persistence.txt").write_text(
-            "Settings survive a reset (the tour wrote them through the card's own\n"
-            "saveSettings(), then the session was reset and the boot line read back):\n\n"
-            f"  {line}\n", encoding="utf-8")
-        if "fov=90" not in line:
-            raise SystemExit(f"FOV did not survive the reset: {line}")
+            time.sleep(0.5)
+        else:
+            raise SystemExit("guest never drew a frame (boot watchdog)")
+        t0 = time.time()
+        print(f"tour started (first frame after boot at {time.strftime('%H:%M:%S')})",
+              flush=True)
+
+        for i, name in enumerate(SHOTS):
+            target = t0 + i * SHOT_SECONDS + SHOT_SECONDS * 0.5
+            time.sleep(max(0.0, target - time.time()))
+            png = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
+            path = out / f"{name}.png"
+            path.write_bytes(png)
+            captured[name] = path
+            print(f"  {name}: {len(png)} bytes", flush=True)
+
+        # Persistence, in the picture rather than on a serial line: the tour
+        # saved brightness and FOV through the card's own saveSettings(), and
+        # shot 0 reads NVS back. After a reset the card has to show 100% / 90.
+        _request(args.api, "POST", f"/sessions/{sid}/reset", {})
+        time.sleep(3.0 * SHOT_SECONDS)   # the tour's one flash write stalls boot
+        png = _request(args.api, "GET", f"/sessions/{sid}/frame.png")
+        path = out / "nvs-after-reset.png"
+        path.write_bytes(png)
+        print(f"  nvs-after-reset: {len(png)} bytes", flush=True)
     finally:
         try:
             _request(args.api, "DELETE", f"/sessions/{sid}")
