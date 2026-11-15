@@ -23,9 +23,11 @@
 
 #include "game.h"
 #include "hal/hal.h"
+#include "motion.h"
 #include "raycast.h"
 #include "render.h"
 #include "screenshot.h"
+#include "settings.h"
 #include "sfx.h"
 #include "storage_sd.h"
 #include "ui.h"
@@ -34,7 +36,7 @@
 namespace {
 
 enum Screen : uint8_t { SCR_TITLE, SCR_PLAY, SCR_PAUSE, SCR_CRAFT, SCR_RECIPES,
-                        SCR_CONTROLS, SCR_SLOTS, SCR_DEAD };
+                        SCR_CONTROLS, SCR_SLOTS, SCR_SETTINGS, SCR_DEAD };
 
 constexpr uint32_t TICK_US   = 1000000u / game::TICK_HZ;
 constexpr int      MAX_CATCHUP = 4;    // never simulate more than this per frame
@@ -69,6 +71,23 @@ char             s_slotDetail[save::SLOT_N][40];
 bool             s_slotSaving = false;   // the picker was opened from the pause card
 char             s_slotNote[32];         // the one line under the card: SAVED, NO SD CARD
 bool             s_slotOk = false;       // ...and whether that line is good news
+
+// The settings card. A separate Menu from the pause card's, because the two
+// have different row counts and neither one's cursor should move when the other
+// opens; open() keeps the cursor as long as it is still in range.
+settings::Settings s_cfg;
+ui::Menu         s_setMenu;
+ui::MenuItem     s_setItems[5];
+// Labels are rebuilt rather than redrawn in place: a row that reads
+// "GYRO: ON" has to stop reading that the moment it is off.
+char             s_setBright[24];
+char             s_setFov[24];
+char             s_setGyro[24];
+char             s_setSens[24];
+char             s_setCal[24];
+// 0 idle, 1 the prompt has been shown and the sample is next, 2 OK, 3 FAIL.
+uint8_t          s_calib = 0;
+int              s_calibFrames = 0;
 
 uint32_t         s_tickAccum = 0;
 uint32_t         s_lastUs = 0;
@@ -283,6 +302,7 @@ Screen s_ctrlFrom = SCR_TITLE;
 bool inRun() {
   switch (s_scr) {
     case SCR_PLAY: case SCR_PAUSE: case SCR_CRAFT: case SCR_RECIPES:
+    case SCR_SETTINGS:
       return true;
     case SCR_CONTROLS:
       return s_ctrlFrom != SCR_TITLE;
@@ -314,7 +334,7 @@ const char* cardFoot() {
 // contents and four comes to 127 px of the 135 the panel has. Five items is
 // fine -- the window scrolls and puts a chevron in the margin, which is
 // machinery Menu already has and nothing was using.
-constexpr int PAUSE_ROWS = 7;
+constexpr int PAUSE_ROWS = 8;
 void openPauseMenu() {
   snprintf(s_soundRow, sizeof(s_soundRow), "SOUND: %s", s_sound ? "ON" : "OFF");
   snprintf(s_fpsRow,   sizeof(s_fpsRow),   "FPS: %s",   s_showFps ? "ON" : "OFF");
@@ -322,11 +342,88 @@ void openPauseMenu() {
   s_items[1] = ui::MenuItem{ "CONTROLS",  "what does what", true };
   s_items[2] = ui::MenuItem{ s_soundRow,  nullptr,         true };
   s_items[3] = ui::MenuItem{ s_fpsRow,    "frame counter", true };
-  s_items[4] = ui::MenuItem{ "SAVE GAME", "to the SD card", true };
-  s_items[5] = ui::MenuItem{ "NEW WORLD", "start over",    true };
-  s_items[6] = ui::MenuItem{ "QUIT",      "back to title", true };
+  s_items[4] = ui::MenuItem{ "SETTINGS",  "screen and gyro", true };
+  s_items[5] = ui::MenuItem{ "SAVE GAME", "to the SD card", true };
+  s_items[6] = ui::MenuItem{ "NEW WORLD", "start over",    true };
+  s_items[7] = ui::MenuItem{ "QUIT",      "back to title", true };
   snprintf(s_title, sizeof(s_title), "PAUSED  NIGHT %u", (unsigned)s_game.night);
   s_menu.open(s_title, s_items, PAUSE_ROWS);
+}
+
+// ---- settings ---------------------------------------------------------------
+
+// The four stored bytes. Everything about what they MEAN lives in settings.cpp,
+// which the host tests compile; this is the read and the write and nothing else.
+void loadSettings() {
+  s_cfg = settings::decode(s_prefs.getUChar("br", 60), s_prefs.getUChar("fov", 75),
+                           s_prefs.getUChar("gyr", 0), s_prefs.getUChar("gs", 1));
+}
+
+void saveSettings() {
+  s_prefs.putUChar("br",  s_cfg.brightnessPct);
+  s_prefs.putUChar("fov", s_cfg.fovDeg);
+  s_prefs.putUChar("gyr", s_cfg.gyroOn ? 1 : 0);
+  s_prefs.putUChar("gs",  s_cfg.gyroSens);
+}
+
+// Pushes the settings at the things they control.
+//
+// liveCam is what keeps the paused world honest: a Camera copies its plane out
+// of the field of view when setAngle runs, so changing the FOV under a camera
+// that is not being ticked leaves it drawing at the old width until the next
+// tick -- which, while paused, is never. Both halves are rebuilt here for the
+// same reason setPitch does both.
+void applySettings(bool liveCam) {
+  hal::setBrightness(settings::brightnessDuty(s_cfg));
+  raycast::setFovDeg(s_cfg.fovDeg);
+  if (liveCam) {
+    raycast::setAngle(s_game.cam, s_game.angle);
+    raycast::setPitch(s_game.cam, (int)(s_game.pitch + 0.5f));
+  }
+  // begin()/end() rather than a read-time test, because "off" is meant to stop
+  // the part being sampled at all. begin() is idempotent while it is already up.
+  if (s_cfg.gyroOn) motion::begin();
+  else              motion::end();
+}
+
+static const char* const kSensName[settings::kSensCount] = { "LOW", "MED", "HIGH" };
+
+// Rebuilds every row from s_cfg. Called on entry and after every change, the
+// same way openPauseMenu() relabels the row a toggle just flipped.
+void openSettings() {
+  const bool haveGyro = s_cfg.gyroOn && motion::available();
+  snprintf(s_setBright, sizeof(s_setBright), "BRIGHTNESS: %u%%",
+           (unsigned)s_cfg.brightnessPct);
+  snprintf(s_setFov, sizeof(s_setFov), "FOV: %u", (unsigned)s_cfg.fovDeg);
+  // Three states, not two: "on but the part did not answer" is a thing the
+  // player has to be able to tell from both of the others.
+  if (s_cfg.gyroOn && !motion::available())
+    snprintf(s_setGyro, sizeof(s_setGyro), "GYRO: NO SENSOR");
+  else
+    snprintf(s_setGyro, sizeof(s_setGyro), "GYRO: %s", s_cfg.gyroOn ? "ON" : "OFF");
+  snprintf(s_setSens, sizeof(s_setSens), "GYRO SENS: %s", kSensName[s_cfg.gyroSens]);
+  if (s_calib == 1)      snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE: HOLD STILL");
+  else if (s_calib == 2) snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE: OK");
+  else if (s_calib == 3) snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE: FAIL");
+  else                   snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE");
+
+  s_setItems[0] = ui::MenuItem{ s_setBright, "10-100 percent",  true };
+  s_setItems[1] = ui::MenuItem{ s_setFov,    "60-90 degrees",   true };
+  s_setItems[2] = ui::MenuItem{ s_setGyro,   "tilt to look",
+                                !(s_cfg.gyroOn && !motion::available()) };
+  s_setItems[3] = ui::MenuItem{ s_setSens,   "low med high",    haveGyro };
+  s_setItems[4] = ui::MenuItem{ s_setCal,    "hold still",      haveGyro };
+  s_setMenu.open("SETTINGS", s_setItems, 5);
+}
+
+// Two vocabularies again: the arrows move, the two keys ACROSS from them adjust.
+// The pause card never needed a second pair, so this is the first card whose
+// footer has to say which is which.
+const char* settingsFoot() {
+  static char foot[44];
+  snprintf(foot, sizeof(foot), "%s MOVE  %s CHG  %s BACK",
+           hal::caps().kMove, hal::caps().kTurn, hal::caps().kBack);
+  return foot;
 }
 
 // Builds the picker from the card headers. Called on open and again after a
@@ -494,6 +591,15 @@ void setup() {
   s_sound = s_prefs.getBool("snd2", true);
   sfx::setEnabled(s_sound);
   s_showFps = s_prefs.getBool("fps1", false);
+
+  // Brightness and field of view are wanted before the first world frame is
+  // drawn, and the gyro is only brought up if it was left on. No camera to
+  // refresh yet: the first setAngle/setPitch happens in game::begin.
+  loadSettings();
+  applySettings(false);
+  Serial.printf("settings: br=%u fov=%u gyro=%u sens=%u\n",
+                (unsigned)s_cfg.brightnessPct, (unsigned)s_cfg.fovDeg,
+                s_cfg.gyroOn ? 1u : 0u, (unsigned)s_cfg.gyroSens);
 
   // A caption for the title we are about to show, and it has to be a DIFFERENT
   // one every time the board is switched on. micros() alone is not enough and
@@ -746,6 +852,18 @@ void loop() {
       // Lockout-gated like the other acting keys, so the press that dismissed a
       // card cannot also launch the player the instant play resumes.
       in.jump  = b.jump  && !s_lockout;
+
+      // One gyro read per FRAME, not per tick: the catch-up loop below may run
+      // this Input up to MAX_CATCHUP times, and reading the sensor inside it
+      // would count the same hand movement three times over. Nothing is read
+      // while the calibration prompt is up, for the same reason.
+      if (s_cfg.gyroOn && s_calib != 1) {
+        float yawDps = 0.0f, pitchDps = 0.0f;
+        if (motion::readRates(yawDps, pitchDps)) {
+          in.gyroYaw   = motion::yawRateRad(yawDps, s_cfg.gyroSens);
+          in.gyroPitch = motion::pitchRateRows(pitchDps, s_cfg.gyroSens);
+        }
+      }
 #ifdef DEV_SERIAL
       if (s_bench) {
         in = game::Input{};
@@ -911,11 +1029,18 @@ void loop() {
               openPauseMenu();          // relabel the row; the cursor survives
               break;
             case 4:
+              s_calib = 0;
+              s_calibFrames = 0;
+              openSettings();
+              s_scr = SCR_SETTINGS;
+              s_lockout = LOCKOUT_FRAMES;
+              break;
+            case 5:
               openSlotMenu(true);
               s_scr = SCR_SLOTS;
               s_lockout = LOCKOUT_FRAMES;
               break;
-            case 5: startRun(); break;
+            case 6: startRun(); break;
             default:
               ui::rerollSplash(micros());
               s_scr = SCR_TITLE;
@@ -982,6 +1107,93 @@ void loop() {
         }
       }
       break;
+
+    // Reached from the pause card, and it draws the world behind it for the
+    // same reason that card does: brightness and field of view are settings you
+    // judge by looking at what they change.
+    case SCR_SETTINGS: {
+      drawScene();
+      ui::hud(s_game);
+      s_setMenu.draw(settingsFoot());
+      if (!s_lockout) {
+        if (b.navUp)   { s_setMenu.move(-1); sfx::play(sfx::kMenuMove); }
+        if (b.navDown) { s_setMenu.move(1);  sfx::play(sfx::kMenuMove); }
+        const int adj = (b.navRight ? 1 : 0) - (b.navLeft ? 1 : 0);
+        bool changed = false;
+        if (adj) {
+          switch (s_setMenu.index()) {
+            case 0: {
+              int pct = (int)s_cfg.brightnessPct + adj * settings::kBrightnessStep;
+              s_cfg.brightnessPct = (uint8_t)(pct < 0 ? 0 : pct);
+              changed = true;
+              break;
+            }
+            case 1: {
+              int deg = (int)s_cfg.fovDeg + adj * settings::kFovStep;
+              s_cfg.fovDeg = (uint8_t)(deg < 0 ? 0 : deg);
+              changed = true;
+              break;
+            }
+            case 3:
+              if (s_cfg.gyroOn && motion::available()) {
+                int lvl = (int)s_cfg.gyroSens + adj;
+                if (lvl < 0) lvl = settings::kSensCount - 1;
+                if (lvl >= settings::kSensCount) lvl = 0;
+                s_cfg.gyroSens = (uint8_t)lvl;
+                changed = true;
+              }
+              break;
+            default:
+              // BRIGHTNESS and FOV are the only rows with a value to move;
+              // GYRO and CALIBRATE are ENTER's, and the disabled rows do not
+              // quietly do something else.
+              break;
+          }
+        }
+        if (confirm && s_setMenu.index() == 2) {
+          s_cfg.gyroOn = !s_cfg.gyroOn;
+          changed = true;
+          if (s_cfg.gyroOn) sfx::play(sfx::kBuy);
+        }
+        if (confirm && s_setMenu.index() == 4 && s_cfg.gyroOn && motion::available()) {
+          // Two frames of prompt before the half second of silence: the label
+          // says HOLD STILL, and this frame's present is what puts it on the
+          // panel before the read loop starts blocking.
+          s_calib = 1;
+          s_calibFrames = 2;
+          openSettings();
+          s_lockout = LOCKOUT_FRAMES;
+        }
+        if (changed) {
+          settings::sanitize(s_cfg);
+          saveSettings();
+          applySettings(true);
+          openSettings();
+        }
+        if (cancel) {
+          s_setMenu.close();
+          openPauseMenu();
+          s_scr = SCR_PAUSE;
+          s_lockout = LOCKOUT_FRAMES;
+        }
+      }
+      // The calibration itself, one frame after its prompt.
+      if (s_calib == 1) {
+        if (s_calibFrames > 0) --s_calibFrames;
+        if (s_calibFrames == 0) {
+          motion::calibrate();
+          s_calib = motion::available() ? 2 : 3;
+          s_calibFrames = 90;
+          openSettings();
+        }
+      } else if (s_calib) {
+        if (s_calibFrames > 0 && --s_calibFrames == 0) {
+          s_calib = 0;
+          openSettings();
+        }
+      }
+      break;
+    }
 
     case SCR_DEAD:
       drawScene();
@@ -1076,7 +1288,8 @@ void loop() {
       Serial.printf("swing=%d\n", (int)s_game.toolPhase);
     } else if (cmd == 's') {
       static const char* const kName[] = { "title", "play", "pause", "craft",
-                                          "recipes", "controls", "slots", "dead" };
+                                          "recipes", "controls", "slots",
+                                          "settings", "dead" };
       // Indexed by the screen, so adding one without a name here would read
       // off the end and hand a wild pointer to the screenshot writer.
       static_assert(sizeof(kName) / sizeof(kName[0]) == SCR_DEAD + 1,

@@ -28,7 +28,7 @@ void sanitize(Settings& s) {
   // An unrecognised sensitivity is not clamped to a neighbour: it is MED, the
   // level that moves 1:1 with the hand, because that is the one a player who
   // never touched the row expects.
-  if (s.gyroSens >= kSensCount) s.gyroSens = (uint8_t)Sens::MED;
+  if (s.gyroSens >= kSensCount) s.gyroSens = kSensMed;
 }
 
 Settings decode(uint8_t br, uint8_t fov, uint8_t gyr, uint8_t gs) {
