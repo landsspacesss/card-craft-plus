@@ -81,7 +81,7 @@ the sensor.
              |
      +-------+--------+
      |                |
- yawRateRad()    pitchRateRows()
+ turnRateRad()   tiltRateRows()
      |                |
   radians/s        horizon rows/s      (rows/rad = the current projection)
      |                |
@@ -89,6 +89,19 @@ the sensor.
                      |
             game::tick(), once per TICK_HZ
 ```
+
+**Which axis is which, and why it is a table.** The first device settled this
+the hard way: a gyro's **Z** is the axis out of the package's top face, which on
+this board is the axis a steering-wheel twist turns — so taking the turn from it
+made a twist move the view and turning about the world's vertical do nothing.
+The axis a player means by "look left" is the in-plane one lying along the
+panel's short side, which is **Y**. So turn ← Y, tilt ← X, and the pair lives in
+`settings::gyroTurn` / `settings::gyroTilt` as two bytes (`gt`, `gp`) rather than
+as scattered signs: a board mounted differently is a value, not a patch.
+
+The settings card's `GYRO` row shows the live sample as its second line —
+`gx -12.3 gy +45.6 gz  +3.4` — so "which axis moved when I turned?" is answered
+on the panel instead of in a conversation.
 
 The rates go into `game::Input` and are integrated inside `game::tick()`, not
 applied to the camera from the frame loop. Two reasons, both load-bearing:
@@ -150,10 +163,10 @@ never writes.
 
 ## What still needs the real board
 
-- **Which axis is which.** Yaw is taken from the gyro's Z and pitch from its X
-  (see `readRates()`), and whether positive is left or right, up or down, is a
-  question about how the part is soldered down. `YAW_SIGN` and `PITCH_SIGN` in
-  `src/motion.h` are the whole fix if the first test turns the wrong way.
+- **The turn direction.** The axis is settled (Y), but whether positive Y should
+  turn left or right has not been checked against the board: if it is backwards,
+  `settings::gyroTurn`'s default becomes `Y-` — one byte, no code change. The
+  same holds for tilt and `X+`.
 - **Drift after calibration** over a few minutes of standing still.
 - **Ten distinguishable brightness steps**, and that 10% is still readable.
 - **60–90° with no visible distortion** of a cube's proportions.

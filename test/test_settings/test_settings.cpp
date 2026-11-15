@@ -41,6 +41,19 @@ void test_decode_clamps_garbage_to_something_usable(void) {
   TEST_ASSERT_FALSE(high.gyroOn);
 }
 
+// The two mapping bytes have defaults and are clamped like everything else.
+void test_gyro_mapping_defaults_and_survives_garbage(void) {
+  settings::Settings s;
+  TEST_ASSERT_EQUAL_UINT8(0, s.gyroTurn);   // Y+
+  TEST_ASSERT_EQUAL_UINT8(0, s.gyroTilt);   // X+
+  const settings::Settings junk = settings::decode(60, 75, 1, 1, 200, 99);
+  TEST_ASSERT_EQUAL_UINT8(0, junk.gyroTurn);
+  TEST_ASSERT_EQUAL_UINT8(0, junk.gyroTilt);
+  const settings::Settings kept = settings::decode(60, 75, 1, 1, 3, 1);
+  TEST_ASSERT_EQUAL_UINT8(3, kept.gyroTurn);
+  TEST_ASSERT_EQUAL_UINT8(1, kept.gyroTilt);
+}
+
 void test_brightness_and_fov_are_quantised(void) {
   settings::Settings s = settings::decode(64, 77, 0, 2);
   TEST_ASSERT_EQUAL_UINT8(60, s.brightnessPct);   // floor to a 10% step
@@ -69,6 +82,7 @@ int main(int, char**) {
   RUN_TEST(test_default_brightness_matches_the_old_fixed_160);
   RUN_TEST(test_decode_clamps_garbage_to_something_usable);
   RUN_TEST(test_brightness_and_fov_are_quantised);
+  RUN_TEST(test_gyro_mapping_defaults_and_survives_garbage);
   RUN_TEST(test_the_lowest_brightness_is_still_a_lit_panel);
   return UNITY_END();
 }

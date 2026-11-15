@@ -28,7 +28,7 @@ import urllib.request
 from pathlib import Path
 
 SHOTS = ["settings", "bright-10", "bright-100", "fov-60", "fov-90",
-         "play-rest", "gyro-yaw", "gyro-pitch"]
+         "play-rest", "gyro-yaw", "gyro-pitch", "gyro-raw"]
 
 # The tour advances on ENTER and on nothing else (see tourTick in src/main.cpp):
 # a wall clock cannot work here, because the panel endpoint serves the last frame
@@ -180,8 +180,10 @@ def main():
             last = frame
             print(f"  {name}: {len(frame)} bytes", flush=True)
 
-            if name == "gyro-pitch":
-                # The last shot is the one that saves 100% / 90 degrees. Make
+            if name == "gyro-raw":
+                # The last shot is the one that saves 100% / 90 degrees (the
+                # shot before it), and it is also the one that shows the live
+                # sample, so by here the save must have happened. Make
                 # sure it was actually reached -- a dropped ENTER leaves the tour
                 # a shot short, and then there is nothing in flash to come back
                 # to -- and photograph it again once it has.

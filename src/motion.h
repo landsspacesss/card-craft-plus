@@ -25,13 +25,19 @@ namespace motion {
 // more than a hand would ever intend.
 constexpr float DEADBAND_DPS = 2.0f;
 
-// Which way is which. These exist because the board's axes are a property of
-// how the part is soldered down, and the two that matter (roll about the
-// screen's normal for yaw, pitch about the horizontal axis) can only be
-// confirmed on the real thing. Flipping a sign here is the whole fix; it must
-// not be scattered through the integration.
-constexpr float YAW_SIGN   = 1.0f;
-constexpr float PITCH_SIGN = 1.0f;
+// Which measured axis is which. The first real device settled this: a gyro's Z
+// is the axis out of the package's top face, which on this board is the axis a
+// steering-wheel twist turns -- so it is NOT the one a player means by "look
+// left". Turning about the world's vertical is the in-plane axis lying along the
+// panel's short side, which is Y. The mapping is therefore a setting (see
+// settings::gyroTurn/gyroTilt), not a pair of constants, because the answer is
+// a property of the soldering and a wrong guess must cost a keypress rather than
+// a reflash. These names are what the check screen prints.
+const char* turnName(uint8_t map);   // "Y+", "Y-", "Z+", "Z-"
+const char* tiltName(uint8_t map);   // "X+", "X-"
+
+// One axis of one sample, in deg/s. axis: 0 = x, 1 = y, 2 = z; anything else 0.
+float pickAxis(uint8_t axis, float gx, float gy, float gz);
 
 // ---- arithmetic (motion_math.cpp) -------------------------------------------
 
@@ -42,10 +48,12 @@ float deadbandDps(float dps);
 // 0.5 / 1.0 / 1.8 for LOW / MED / HIGH. Anything else is MED.
 float sensFactor(uint8_t level);
 
-// A rate in deg/s turned into what the simulation takes: radians per second for
-// the camera's angle, horizon rows per second for its pitch.
-float yawRateRad(float dps, uint8_t level);
-float pitchRateRows(float dps, uint8_t level);
+// A raw three-axis sample and a mapping turned into what the simulation takes:
+// radians per second for the camera's angle, horizon rows per second for its
+// pitch. The mapping picks the axis AND its sign, so an inverted tilt is a
+// setting rather than a patch.
+float turnRateRad(float gx, float gy, float gz, uint8_t map, uint8_t level);
+float tiltRateRows(float gx, float gy, float gz, uint8_t map, uint8_t level);
 
 // What a still sensor reads, averaged; and one sample with it removed.
 float averageBias(const float* samples, int n);
@@ -75,14 +83,17 @@ void end();
 // rather than as a success nobody checked.
 bool calibrate();
 
-// Rates in deg/s with the calibrated offset removed. False when there is
-// nothing to read, in which case the references are untouched.
-bool readRates(float& yawDps, float& pitchDps);
+// One sample of all three axes in deg/s, with the calibrated offsets removed.
+// False when there is nothing to read, in which case the references are
+// untouched. All three are handed out because which two are wanted is a
+// decision made above this, and because the check screen has to show what the
+// part is actually reporting.
+bool readRaw(float& gx, float& gy, float& gz);
 
 #ifdef CRAFTCRAFT_GYRO_FAKE
 // Emulator only: QEMU does not model the BMI270, so the tour build injects the
-// rates a hand would have produced and everything downstream runs for real.
-void fakeSet(float yawDps, float pitchDps);
+// sample a hand would have produced and everything downstream runs for real.
+void fakeSet(float gx, float gy, float gz);
 #endif
 
 }  // namespace motion

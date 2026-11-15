@@ -37,11 +37,25 @@ constexpr uint8_t kSensMed   = 1;
 constexpr uint8_t kSensHigh  = 2;
 constexpr uint8_t kSensCount = 3;
 
+// Which measured axis each half of the look control comes from.
+//
+// This is a setting and not two constants because the answer is a property of
+// how the part is soldered to the board, and the first real device answered it
+// the hard way: the panel's normal axis (Z) is the one a steering-wheel twist
+// turns, while the axis a player means by "look left" is the one lying along the
+// world's vertical. The default here is the corrected pair, Y for turn; Z stays
+// reachable so a board that turns out to be mounted differently is a keypress
+// and not a reflash.
+constexpr uint8_t kTurnCount = 4;   // Y+, Y-, Z+, Z-
+constexpr uint8_t kTiltCount = 2;   // X+, X-
+
 struct Settings {
   uint8_t brightnessPct = 60;    // ≈ the 160/255 this used to be hardcoded to
   uint8_t fovDeg        = 75;    // ≈ the 0.75 plane the renderer shipped with
   bool    gyroOn        = false; // off out of the box: it costs power and drifts
   uint8_t gyroSens      = kSensMed;
+  uint8_t gyroTurn      = 0;     // Y+
+  uint8_t gyroTilt      = 0;     // X+
 };
 
 // Forces every field into the range this build understands. Everything that
@@ -50,7 +64,8 @@ void sanitize(Settings& s);
 
 // A Settings from four stored bytes, sanitised. Kept as a function rather than
 // four reads in main.cpp so the clamping is what the tests exercise.
-Settings decode(uint8_t br, uint8_t fov, uint8_t gyr, uint8_t gs);
+Settings decode(uint8_t br, uint8_t fov, uint8_t gyr, uint8_t gs,
+                uint8_t gt = 0, uint8_t gp = 0);
 
 // What the panel's backlight is actually asked for, 0..255.
 uint8_t brightnessDuty(const Settings& s);

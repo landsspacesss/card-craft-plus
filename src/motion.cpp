@@ -35,13 +35,15 @@ enum class Src : uint8_t { NONE, UNIFIED, DIRECT };
 Src     s_src = Src::NONE;
 bool    s_ok = false;
 bool    s_asleep = false;
-float   s_biasYaw = 0.0f;
-float   s_biasPitch = 0.0f;
+float   s_biasX = 0.0f;
+float   s_biasY = 0.0f;
+float   s_biasZ = 0.0f;
 m5::BMI270_Class* s_direct = nullptr;
 
 #ifdef CRAFTCRAFT_GYRO_FAKE
-float s_fakeYaw = 0.0f;
-float s_fakePitch = 0.0f;
+float s_fakeX = 0.0f;
+float s_fakeY = 0.0f;
+float s_fakeZ = 0.0f;
 #endif
 
 constexpr int CAL_SAMPLES = 32;
@@ -162,24 +164,23 @@ void end() {
 #endif
 }
 
-bool readRates(float& yawDps, float& pitchDps) {
+bool readRaw(float& gx, float& gy, float& gz) {
   if (!s_ok || s_asleep) return false;
 
 #ifdef CRAFTCRAFT_GYRO_FAKE
-  yawDps   = applyBias(s_fakeYaw, s_biasYaw);
-  pitchDps = applyBias(s_fakePitch, s_biasPitch);
+  gx = applyBias(s_fakeX, s_biasX);
+  gy = applyBias(s_fakeY, s_biasY);
+  gz = applyBias(s_fakeZ, s_biasZ);
   return true;
 #else
-  float gx = 0.0f, gy = 0.0f, gz = 0.0f;
-  if (!readGyroDps(gx, gy, gz)) return false;
-
-  // Yaw is rotation about the axis out of the screen (the part's Z); pitch is
-  // rotation about the horizontal one (its X). Which physical axis that is on
-  // this board is a soldering question, not a software one -- if the first
-  // real-device test turns the wrong way, YAW_SIGN / PITCH_SIGN in motion.h is
-  // the whole fix. gy is deliberately unused: nothing here rolls.
-  yawDps   = applyBias(gz, s_biasYaw);
-  pitchDps = applyBias(gx, s_biasPitch);
+  float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+  if (!readGyroDps(rx, ry, rz)) return false;
+  // All three axes, unfiltered and unmapped: which of them means "turn" is a
+  // question about the soldering, and it is answered on the check screen by
+  // watching which number moves -- not here.
+  gx = applyBias(rx, s_biasX);
+  gy = applyBias(ry, s_biasY);
+  gz = applyBias(rz, s_biasZ);
   return true;
 #endif
 }
@@ -188,37 +189,42 @@ bool calibrate() {
   if (!s_ok || s_asleep) return false;
 
 #ifdef CRAFTCRAFT_GYRO_FAKE
-  s_biasYaw = 0.0f;
-  s_biasPitch = 0.0f;
+  s_biasX = 0.0f;
+  s_biasY = 0.0f;
+  s_biasZ = 0.0f;
   return true;
 #else
-  float yaw[CAL_SAMPLES];
-  float pitch[CAL_SAMPLES];
+  float xs[CAL_SAMPLES];
+  float ys[CAL_SAMPLES];
+  float zs[CAL_SAMPLES];
   int n = 0;
   for (int i = 0; i < CAL_SAMPLES; ++i) {
     float gx = 0.0f, gy = 0.0f, gz = 0.0f;
     // A failed read is skipped rather than counted as zero: one zero in the
     // average pulls the offset and leaves a drift in the direction it came from.
     if (readGyroDps(gx, gy, gz)) {
-      yaw[n]   = gz;
-      pitch[n] = gx;
+      xs[n] = gx;
+      ys[n] = gy;
+      zs[n] = gz;
       ++n;
     }
     delay(CAL_GAP_MS);
   }
   if (n < CAL_SAMPLES / 2) return false;   // not enough samples to claim one
-  s_biasYaw   = averageBias(yaw, n);
-  s_biasPitch = averageBias(pitch, n);
-  Serial.printf("motion: bias %.2f / %.2f dps from %d samples\n",
-                (double)s_biasYaw, (double)s_biasPitch, n);
+  s_biasX = averageBias(xs, n);
+  s_biasY = averageBias(ys, n);
+  s_biasZ = averageBias(zs, n);
+  Serial.printf("motion: bias %.2f / %.2f / %.2f dps from %d samples\n",
+                (double)s_biasX, (double)s_biasY, (double)s_biasZ, n);
   return true;
 #endif
 }
 
 #ifdef CRAFTCRAFT_GYRO_FAKE
-void fakeSet(float yawDps, float pitchDps) {
-  s_fakeYaw = yawDps;
-  s_fakePitch = pitchDps;
+void fakeSet(float gx, float gy, float gz) {
+  s_fakeX = gx;
+  s_fakeY = gy;
+  s_fakeZ = gz;
 }
 #endif
 

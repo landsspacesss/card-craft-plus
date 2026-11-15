@@ -85,6 +85,11 @@ char             s_setFov[24];
 char             s_setGyro[24];
 char             s_setSens[24];
 char             s_setCal[24];
+// The gyro row's second line, rebuilt every frame while the card is open: the
+// three raw rates, signed, one decimal. It is here so a player who reports that
+// the view turns the wrong way can read out which axis actually moved instead
+// of describing it.
+char             s_gyroLive[40];
 // 0 idle, 1 the prompt has been shown and the sample is next, 2 OK, 3 FAIL.
 uint8_t          s_calib = 0;
 int              s_calibFrames = 0;
@@ -356,7 +361,8 @@ void openPauseMenu() {
 // which the host tests compile; this is the read and the write and nothing else.
 void loadSettings() {
   s_cfg = settings::decode(s_prefs.getUChar("br", 60), s_prefs.getUChar("fov", 75),
-                           s_prefs.getUChar("gyr", 0), s_prefs.getUChar("gs", 1));
+                           s_prefs.getUChar("gyr", 0), s_prefs.getUChar("gs", 1),
+                           s_prefs.getUChar("gt", 0), s_prefs.getUChar("gp", 0));
 }
 
 void saveSettings() {
@@ -364,6 +370,11 @@ void saveSettings() {
   s_prefs.putUChar("fov", s_cfg.fovDeg);
   s_prefs.putUChar("gyr", s_cfg.gyroOn ? 1 : 0);
   s_prefs.putUChar("gs",  s_cfg.gyroSens);
+  // Written but not yet exposed on the card: the mapping is a property of the
+  // soldering (see settings::gyroTurn), and keeping it in NVS means a build
+  // that changes only the default cannot fight a stored value.
+  s_prefs.putUChar("gt",  s_cfg.gyroTurn);
+  s_prefs.putUChar("gp",  s_cfg.gyroTilt);
 }
 
 // Pushes the settings at the things they control.
@@ -413,7 +424,9 @@ void openSettings() {
   // back to OFF, and a greyed row that still answers to ENTER is worse than an
   // honest one. The two rows below it are the ones that go dead, because there
   // is nothing for them to do without a sensor.
-  s_setItems[2] = ui::MenuItem{ s_setGyro,   "tilt to look",   true };
+  // While the gyro is up, its second line is the live sample.
+  if (haveGyro) snprintf(s_gyroLive, sizeof(s_gyroLive), "gx/gy/gz  --");
+  s_setItems[2] = ui::MenuItem{ s_setGyro, haveGyro ? s_gyroLive : "tilt to look", true };
   s_setItems[3] = ui::MenuItem{ s_setSens,   "low med high",    haveGyro };
   s_setItems[4] = ui::MenuItem{ s_setCal,    "hold still",      haveGyro };
   s_setMenu.open("SETTINGS", s_setItems, 5);
@@ -443,7 +456,7 @@ const char* settingsFoot() {
 
 static const char* const kTourName[] = { "settings",    "bright-10", "bright-100",
                                          "fov-60",      "fov-90",    "play-rest",
-                                         "gyro-yaw",    "gyro-pitch" };
+                                         "gyro-yaw",    "gyro-pitch", "gyro-raw" };
 constexpr int TOUR_SHOTS = (int)(sizeof(kTourName) / sizeof(kTourName[0]));
 
 void startRun();   // defined below, beside the other screen transitions
@@ -477,7 +490,7 @@ void tourEnter(int n) {
     case 3: s_cfg.fovDeg = settings::kFovMin;               tourApply(); break;
     case 4: s_cfg.fovDeg = settings::kFovMax;               tourApply(); break;
     case 5:   // the same view without the gyro, as the reference for the two below
-      motion::fakeSet(0.0f, 0.0f);
+      motion::fakeSet(0.0f, 0.0f, 0.0f);
       s_cfg.gyroOn = false;
       s_game.angle = 0.0f;
       s_game.pitch = (float)raycast::HORIZON;
@@ -486,13 +499,13 @@ void tourEnter(int n) {
       s_lockout = 0;
       break;
     case 6:   // ...and turning on the spot, at about the speed a hand would
-      motion::fakeSet(40.0f, 0.0f);
+      motion::fakeSet(0.0f, 40.0f, 0.0f);   // turn is on Y now
       s_cfg.gyroOn = true;
       applySettings(true);
       s_scr = SCR_PLAY;
       s_lockout = 0;
       break;
-    default: {   // ...and tilting the far edge down to look up
+    case 7:   // ...and tilting the far edge down to look up
       // The one flash write of the whole tour, at the end. A commit under QEMU
       // costs ten or twenty seconds, so it must not sit in the middle of the
       // shot schedule; and it has to happen BEFORE the reset for the picture
@@ -500,10 +513,18 @@ void tourEnter(int n) {
       s_cfg.brightnessPct = settings::kBrightnessMax;
       s_cfg.fovDeg = settings::kFovMax;
       saveSettings();
-      motion::fakeSet(0.0f, 25.0f);
+      motion::fakeSet(25.0f, 0.0f, 0.0f);
       s_cfg.gyroOn = true;
       applySettings(true);
       s_scr = SCR_PLAY;
+      s_lockout = 0;
+      break;
+    default: {  // the card with a live sample on its GYRO row
+      s_cfg.gyroOn = true;
+      motion::fakeSet(-12.3f, 45.6f, 3.4f);
+      applySettings(true);
+      openSettings();
+      s_scr = SCR_SETTINGS;
       s_lockout = 0;
       break;
     }
@@ -976,10 +997,14 @@ void loop() {
       // would count the same hand movement three times over. Nothing is read
       // while the calibration prompt is up, for the same reason.
       if (s_cfg.gyroOn && s_calib != 1) {
-        float yawDps = 0.0f, pitchDps = 0.0f;
-        if (motion::readRates(yawDps, pitchDps)) {
-          in.gyroYaw   = motion::yawRateRad(yawDps, s_cfg.gyroSens);
-          in.gyroPitch = motion::pitchRateRows(pitchDps, s_cfg.gyroSens);
+        float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+        if (motion::readRaw(gx, gy, gz)) {
+          // Turn is the axis along the world's vertical while the board is held
+          // the way a player holds it -- Y, not the panel's normal. The first
+          // device proved that: Z is the steering-wheel axis, and taking the
+          // turn from it made a twist move the view while turning did nothing.
+          in.gyroYaw   = motion::turnRateRad(gx, gy, gz, s_cfg.gyroTurn, s_cfg.gyroSens);
+          in.gyroPitch = motion::tiltRateRows(gx, gy, gz, s_cfg.gyroTilt, s_cfg.gyroSens);
         }
       }
 #ifdef DEV_SERIAL
@@ -1230,6 +1255,18 @@ void loop() {
     // same reason that card does: brightness and field of view are settings you
     // judge by looking at what they change.
     case SCR_SETTINGS: {
+      // The GYRO row's second line is a live sample. The card is redrawn every
+      // frame, so this is as current as the loop -- which is the point: a
+      // player who says "the view turns the wrong way" can read out which axis
+      // actually moved instead of describing it.
+      if (s_cfg.gyroOn && motion::available()) {
+        float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+        if (motion::readRaw(gx, gy, gz)) {
+          snprintf(s_gyroLive, sizeof(s_gyroLive),
+                   "gx%+6.1f gy%+6.1f gz%+6.1f",
+                   (double)gx, (double)gy, (double)gz);
+        }
+      }
       drawScene();
       ui::hud(s_game);
       s_setMenu.draw(settingsFoot());
