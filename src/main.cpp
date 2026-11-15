@@ -19,6 +19,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include <Preferences.h>
+#include <WiFi.h>
 #include <esp_heap_caps.h>
 
 #include "game.h"
@@ -693,6 +694,23 @@ void sdSelfTest();          // defined below, beside the code it belongs to
 #endif
 
 void setup() {
+#ifdef CC_NET_PROBE
+  {
+    // What does bringing the radio up actually cost? Measured, because the
+    // answer decides whether the game can carry a network at all: the heap
+    // figure is the one that gates it, and it cannot be read off a size report.
+    ESP_LOGI("netprobe", "before_wifi heap=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    WiFi.mode(WIFI_STA);
+    delay(1500);
+    ESP_LOGI("netprobe", "after_wifi heap=%u largest=%u low=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+  }
+#endif
+
   // Before anything else: two contiguous 64.8 KB DMA blocks are the tightest
   // allocation in the program, and the display and keyboard libraries have not
   // had a chance to fragment the heap yet.
