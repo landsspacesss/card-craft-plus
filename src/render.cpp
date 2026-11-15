@@ -251,6 +251,18 @@ static float    s_amb  = 1.0f;      // ambient light, for mobs (blocks use the L
 static uint8_t  s_fogR, s_fogG, s_fogB;
 
 bool reserve() {
+#ifdef CC_SINGLE_BUF
+  // One framebuffer instead of two: 64,800 bytes handed back to the heap, paid
+  // for by the SPI transfer no longer overlapping the next frame's drawing.
+  // Both indices point at the same block so nothing else has to know -- but
+  // present() then has to wait for the DMA before the next frame draws into it.
+  s_buf[0] = (lgfx::swap565_t*)heap_caps_malloc(
+      (size_t)W * H * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  if (!s_buf[0]) return false;
+  memset(s_buf[0], 0, (size_t)W * H * sizeof(uint16_t));
+  s_buf[1] = s_buf[0];
+  return true;
+#else
   for (int i = 0; i < 2; ++i) {
     s_buf[i] = (lgfx::swap565_t*)heap_caps_malloc(
         (size_t)W * H * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -258,6 +270,7 @@ bool reserve() {
     memset(s_buf[i], 0, (size_t)W * H * sizeof(uint16_t));
   }
   return true;
+#endif
 }
 
 void attach(LGFX_Device& disp) { s_disp = &disp; buildTextures(); }
@@ -2093,6 +2106,11 @@ void present() {
   g_usWait = micros() - tw;
 #endif
   s_disp->pushImageDMA(0, 0, W, H, (const lgfx::swap565_t*)s_buf[s_cur]);
+#ifdef CC_SINGLE_BUF
+  // The next frame draws into the block this one is still sending, so the
+  // overlap that double buffering bought is gone by construction. Wait for it.
+  s_disp->waitDMA();
+#endif
   s_cur ^= 1;
 }
 
