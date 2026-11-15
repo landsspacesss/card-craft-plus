@@ -44,11 +44,14 @@ void test_decode_clamps_garbage_to_something_usable(void) {
 // The two mapping bytes have defaults and are clamped like everything else.
 void test_gyro_mapping_defaults_and_survives_garbage(void) {
   settings::Settings s;
-  TEST_ASSERT_EQUAL_UINT8(0, s.gyroTurn);   // Y+
-  TEST_ASSERT_EQUAL_UINT8(0, s.gyroTilt);   // X+
+  // The axis is Y and the direction is negative: the device reported turning
+  // left moving the view right, so the default is the corrected pair and not
+  // the first guess.
+  TEST_ASSERT_EQUAL_UINT8(settings::kTurnYMinus, s.gyroTurn);
+  TEST_ASSERT_EQUAL_UINT8(settings::kTiltXPlus, s.gyroTilt);
   const settings::Settings junk = settings::decode(60, 75, 1, 1, 200, 99);
-  TEST_ASSERT_EQUAL_UINT8(0, junk.gyroTurn);
-  TEST_ASSERT_EQUAL_UINT8(0, junk.gyroTilt);
+  TEST_ASSERT_EQUAL_UINT8(settings::kTurnDefault, junk.gyroTurn);
+  TEST_ASSERT_EQUAL_UINT8(settings::kTiltDefault, junk.gyroTilt);
   const settings::Settings kept = settings::decode(60, 75, 1, 1, 3, 1);
   TEST_ASSERT_EQUAL_UINT8(3, kept.gyroTurn);
   TEST_ASSERT_EQUAL_UINT8(1, kept.gyroTilt);

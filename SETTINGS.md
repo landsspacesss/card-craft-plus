@@ -10,6 +10,8 @@ looking at what they change.
 | `FOV` | `<` `>` | 60–90°, in fives. Applied immediately |
 | `GYRO` | `ENTER` | Tilt the board to look around |
 | `GYRO SENS` | `<` `>` | LOW / MED / HIGH = 0.5× / 1× / 1.8× |
+| `GYRO TURN` | `<` `>` | which axis turns the view, and its sign: Y+ / Y- / Z+ / Z- (default Y-) |
+| `GYRO TILT` | `<` `>` | X+ / X- (default X+) |
 | `CALIBRATE` | `ENTER` | Averages half a second of stillness into the zero-rate offset |
 
 `^` `v` move the cursor, `<` `>` change the row, `ESC` goes back to the pause
@@ -28,6 +30,9 @@ Four bytes in the `cardcraft` NVS namespace — the same namespace as `best`,
 | `fov` | field of view, degrees | 75 (about the old 0.75 plane) |
 | `gyr` | gyro enabled, 0/1 | 0 — off |
 | `gs` | sensitivity, 0/1/2 | 1 (MED) |
+| `gt` | turn axis+sign, 0..3 = Y+/Y-/Z+/Z- | 1 (Y-) |
+| `gp` | tilt axis+sign, 0..1 = X+/X- | 0 (X+) |
+| `gmv` | mapping version; a stored `gt`/`gp` from an older meaning is ignored | 2 |
 
 Everything read out of NVS goes through `settings::decode()`, which clamps and
 quantises. A card that ran an older build, or lost power mid-write, hands back
@@ -164,9 +169,10 @@ never writes.
 ## What still needs the real board
 
 - **The turn direction.** The axis is settled (Y), but whether positive Y should
-  turn left or right has not been checked against the board: if it is backwards,
-  `settings::gyroTurn`'s default becomes `Y-` — one byte, no code change. The
-  same holds for tilt and `X+`.
+  turn left or right was answered by the device too: the first corrected build
+  turned the wrong way, so the default is `Y-`. Both halves are now rows on the
+  settings card (`GYRO TURN: Y+/Y-/Z+/Z-`, `GYRO TILT: X+/X-`), which is what
+  makes a wrong guess a keypress rather than another build.
 - **Drift after calibration** over a few minutes of standing still.
 - **Ten distinguishable brightness steps**, and that 10% is still readable.
 - **60–90° with no visible distortion** of a cube's proportions.

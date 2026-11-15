@@ -46,16 +46,35 @@ constexpr uint8_t kSensCount = 3;
 // world's vertical. The default here is the corrected pair, Y for turn; Z stays
 // reachable so a board that turns out to be mounted differently is a keypress
 // and not a reflash.
-constexpr uint8_t kTurnCount = 4;   // Y+, Y-, Z+, Z-
-constexpr uint8_t kTiltCount = 2;   // X+, X-
+constexpr uint8_t kTurnYPlus  = 0;
+constexpr uint8_t kTurnYMinus = 1;
+constexpr uint8_t kTurnZPlus  = 2;
+constexpr uint8_t kTurnZMinus = 3;
+constexpr uint8_t kTurnCount  = 4;
+
+constexpr uint8_t kTiltXPlus  = 0;
+constexpr uint8_t kTiltXMinus = 1;
+constexpr uint8_t kTiltCount  = 2;
+
+// What the first board needed: the axis is Y (settled on the device) and the
+// direction is negative. The device answered the second half a build later --
+// turning the body left moved the view right -- which is exactly why this is a
+// value the card can change rather than a sign compiled into the integration.
+constexpr uint8_t kTurnDefault = kTurnYMinus;
+constexpr uint8_t kTiltDefault = kTiltXPlus;
+
+// Bumped whenever kTurnDefault/kTiltDefault change meaning. A card that stored
+// a mapping under the old default would otherwise keep the old answer forever,
+// and the fix would look like it did nothing.
+constexpr uint8_t kMappingVersion = 2;
 
 struct Settings {
   uint8_t brightnessPct = 60;    // ≈ the 160/255 this used to be hardcoded to
   uint8_t fovDeg        = 75;    // ≈ the 0.75 plane the renderer shipped with
   bool    gyroOn        = false; // off out of the box: it costs power and drifts
   uint8_t gyroSens      = kSensMed;
-  uint8_t gyroTurn      = 0;     // Y+
-  uint8_t gyroTilt      = 0;     // X+
+  uint8_t gyroTurn      = kTurnDefault;   // Y-
+  uint8_t gyroTilt      = kTiltDefault;   // X+
 };
 
 // Forces every field into the range this build understands. Everything that
@@ -65,7 +84,7 @@ void sanitize(Settings& s);
 // A Settings from four stored bytes, sanitised. Kept as a function rather than
 // four reads in main.cpp so the clamping is what the tests exercise.
 Settings decode(uint8_t br, uint8_t fov, uint8_t gyr, uint8_t gs,
-                uint8_t gt = 0, uint8_t gp = 0);
+                uint8_t gt = kTurnDefault, uint8_t gp = kTiltDefault);
 
 // What the panel's backlight is actually asked for, 0..255.
 uint8_t brightnessDuty(const Settings& s);

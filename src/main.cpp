@@ -77,7 +77,7 @@ bool             s_slotOk = false;       // ...and whether that line is good new
 // opens; open() keeps the cursor as long as it is still in range.
 settings::Settings s_cfg;
 ui::Menu         s_setMenu;
-ui::MenuItem     s_setItems[5];
+ui::MenuItem     s_setItems[7];
 // Labels are rebuilt rather than redrawn in place: a row that reads
 // "GYRO: ON" has to stop reading that the moment it is off.
 char             s_setBright[24];
@@ -85,6 +85,8 @@ char             s_setFov[24];
 char             s_setGyro[24];
 char             s_setSens[24];
 char             s_setCal[24];
+char             s_setTurn[24];
+char             s_setTilt[24];
 // The gyro row's second line, rebuilt every frame while the card is open: the
 // three raw rates, signed, one decimal. It is here so a player who reports that
 // the view turns the wrong way can read out which axis actually moved instead
@@ -360,9 +362,17 @@ void openPauseMenu() {
 // The four stored bytes. Everything about what they MEAN lives in settings.cpp,
 // which the host tests compile; this is the read and the write and nothing else.
 void loadSettings() {
+  // A stored mapping is only trusted if it was written by a build that means the
+  // same thing by it. `gmv` is that statement: without it, the corrected
+  // default would be overridden by the value the previous build left behind and
+  // the fix would look like it did nothing at all.
+  const bool stored = s_prefs.getUChar("gmv", 0) == settings::kMappingVersion;
   s_cfg = settings::decode(s_prefs.getUChar("br", 60), s_prefs.getUChar("fov", 75),
                            s_prefs.getUChar("gyr", 0), s_prefs.getUChar("gs", 1),
-                           s_prefs.getUChar("gt", 0), s_prefs.getUChar("gp", 0));
+                           stored ? s_prefs.getUChar("gt", settings::kTurnDefault)
+                                  : settings::kTurnDefault,
+                           stored ? s_prefs.getUChar("gp", settings::kTiltDefault)
+                                  : settings::kTiltDefault);
 }
 
 void saveSettings() {
@@ -375,6 +385,7 @@ void saveSettings() {
   // that changes only the default cannot fight a stored value.
   s_prefs.putUChar("gt",  s_cfg.gyroTurn);
   s_prefs.putUChar("gp",  s_cfg.gyroTilt);
+  s_prefs.putUChar("gmv", settings::kMappingVersion);
 }
 
 // Pushes the settings at the things they control.
@@ -413,6 +424,10 @@ void openSettings() {
   else
     snprintf(s_setGyro, sizeof(s_setGyro), "GYRO: %s", s_cfg.gyroOn ? "ON" : "OFF");
   snprintf(s_setSens, sizeof(s_setSens), "GYRO SENS: %s", kSensName[s_cfg.gyroSens]);
+  // Which axis each control takes, named the way the raw line above names it, so
+  // "turn is Y-" is readable against "gy +45.6" on the same card.
+  snprintf(s_setTurn, sizeof(s_setTurn), "GYRO TURN: %s", motion::turnName(s_cfg.gyroTurn));
+  snprintf(s_setTilt, sizeof(s_setTilt), "GYRO TILT: %s", motion::tiltName(s_cfg.gyroTilt));
   if (s_calib == 1)      snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE: HOLD STILL");
   else if (s_calib == 2) snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE: OK");
   else if (s_calib == 3) snprintf(s_setCal, sizeof(s_setCal), "CALIBRATE: FAIL");
@@ -428,8 +443,10 @@ void openSettings() {
   if (haveGyro) snprintf(s_gyroLive, sizeof(s_gyroLive), "gx/gy/gz  --");
   s_setItems[2] = ui::MenuItem{ s_setGyro, haveGyro ? s_gyroLive : "tilt to look", true };
   s_setItems[3] = ui::MenuItem{ s_setSens,   "low med high",    haveGyro };
-  s_setItems[4] = ui::MenuItem{ s_setCal,    "hold still",      haveGyro };
-  s_setMenu.open("SETTINGS", s_setItems, 5);
+  s_setItems[4] = ui::MenuItem{ s_setTurn,   "left and right",  haveGyro };
+  s_setItems[5] = ui::MenuItem{ s_setTilt,   "up and down",     haveGyro };
+  s_setItems[6] = ui::MenuItem{ s_setCal,    "hold still",      haveGyro };
+  s_setMenu.open("SETTINGS", s_setItems, 7);
 }
 
 // Two vocabularies again: the arrows move, the two keys ACROSS from them adjust.
@@ -1298,8 +1315,23 @@ void loop() {
                 changed = true;
               }
               break;
+            case 4:
+              if (s_cfg.gyroOn && motion::available()) {
+                int m = (int)s_cfg.gyroTurn + adj;
+                if (m < 0) m = settings::kTurnCount - 1;
+                if (m >= settings::kTurnCount) m = 0;
+                s_cfg.gyroTurn = (uint8_t)m;
+                changed = true;
+              }
+              break;
+            case 5:
+              if (s_cfg.gyroOn && motion::available()) {
+                s_cfg.gyroTilt = (uint8_t)(s_cfg.gyroTilt ? 0 : 1);
+                changed = true;
+              }
+              break;
             default:
-              // BRIGHTNESS and FOV are the only rows with a value to move;
+              // BRIGHTNESS and FOV are the only other rows with a value to move;
               // GYRO and CALIBRATE are ENTER's, and the disabled rows do not
               // quietly do something else.
               break;
@@ -1310,7 +1342,7 @@ void loop() {
           changed = true;
           if (s_cfg.gyroOn) sfx::play(sfx::kBuy);
         }
-        if (confirm && s_setMenu.index() == 4 && s_cfg.gyroOn && motion::available()) {
+        if (confirm && s_setMenu.index() == 6 && s_cfg.gyroOn && motion::available()) {
           // Two frames of prompt before the half second of silence: the label
           // says HOLD STILL, and this frame's present is what puts it on the
           // panel before the read loop starts blocking.

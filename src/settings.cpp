@@ -25,8 +25,8 @@ void sanitize(Settings& s) {
   // level that moves 1:1 with the hand, because that is the one a player who
   // never touched the row expects.
   if (s.gyroSens >= kSensCount) s.gyroSens = kSensMed;
-  if (s.gyroTurn >= kTurnCount) s.gyroTurn = 0;
-  if (s.gyroTilt >= kTiltCount) s.gyroTilt = 0;
+  if (s.gyroTurn >= kTurnCount) s.gyroTurn = kTurnDefault;
+  if (s.gyroTilt >= kTiltCount) s.gyroTilt = kTiltDefault;
 }
 
 Settings decode(uint8_t br, uint8_t fov, uint8_t gyr, uint8_t gs,
